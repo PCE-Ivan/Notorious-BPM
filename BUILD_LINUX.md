@@ -1,13 +1,21 @@
 # Running (and optionally building) Notorious B.P.M. on Linux
 
-I can't build or test this myself — I'm running on macOS with no Linux
-machine available — so this is everything needed to get it running on a
-Linux machine, plus what to check along the way. The good news: almost all
-of the app's code is already fully cross-platform (it already picks the
-right config folder, file dialogs, etc. for whichever OS it's running on)
-— nothing in `app.py`, `config.py`, `scan_library.py`, or `launcher.py`
-needed to change for Linux at all. The only Linux-specific things are the
-system packages pywebview needs for its native window, listed below.
+This has now actually been built and tested end-to-end on a real ARM64
+Ubuntu machine (a VM on Apple Silicon) — running from source, a PyInstaller
+standalone build, and a real music library (15,000+ tracks on a FAT32 USB
+drive) all confirmed working, including the native GTK window and Live
+Radio's VU meters. Almost all of the app's code is already fully
+cross-platform (it already picks the right config folder, file dialogs,
+etc. for whichever OS it's running on) — nothing in `app.py`, `config.py`,
+`scan_library.py`, or `launcher.py` needed to change for Linux at all. The
+only Linux-specific things are the system packages pywebview needs for its
+native window, listed below.
+
+**Architecture note:** a build made on one CPU architecture only runs on
+that same architecture — an ARM64 build (like the one tested) won't run on
+a normal Intel/AMD PC, and vice versa. Part 1 below (running from source)
+works on any architecture as-is; Part 2's standalone build needs to be
+built separately on each architecture you want to hand out a binary for.
 
 These instructions assume **Ubuntu or Debian** (the most common case for
 "a friend wants to test it"). If it's a different distro (Fedora, Arch,
@@ -136,9 +144,27 @@ cp NotoriousBPM.AppDir/usr/bin/NotoriousBPM NotoriousBPM.AppDir/AppRun  # or a s
 ./appimagetool-x86_64.AppImage NotoriousBPM.AppDir
 ```
 
-This produces a single `Notorious_B.P.M.-x86_64.AppImage` file — mark it
-executable (`chmod +x`) and double-click or run it directly, no
-installation step at all. This part is the least tested of the three
-(genuinely untried, not just "untested by me on Linux" like the rest) —
-if `appimagetool` complains about the AppDir structure, its own error
-messages are more authoritative than this guide.
+This produces a single `Notorious_B.P.M.-x86_64.AppImage` file (substitute
+`aarch64` for the tool download and in the resulting filename if building
+on ARM64, e.g. an Apple Silicon Linux VM) — mark it executable
+(`chmod +x`) and double-click or run it directly, no installation step at
+all. This part is still the least tested of the three — Part 1 and Part 2
+have both been confirmed working on a real machine, but this AppImage step
+hasn't, due to no internet access being available in the test VM at the
+time. If `appimagetool` complains about the AppDir structure, its own
+error messages are more authoritative than this guide.
+
+## Known issue: frozen build hangs if the music folder goes missing
+
+If `music_dir` in the config points at a folder that no longer exists
+(e.g. an external/USB drive that got unplugged or unmounted) **and**
+you're running the PyInstaller-built binary specifically (not `python3
+launcher.py` from source), the app should fall back to showing a folder
+picker dialog — but that dialog hangs indefinitely in the frozen build
+instead of appearing, with no error printed anywhere (a `console=False`
+PyInstaller build on Linux appears to swallow stdout/stderr, which is
+also why this was hard to track down). Running from source doesn't have
+this problem. Workaround until this gets a real fix: make sure
+`music_dir` in `~/.local/share/Jukebox/config.json` points at a folder
+that actually exists before launching the built binary, or delete that
+line (or the whole file) so it starts completely fresh.
