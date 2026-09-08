@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notorious B.P.M.</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app" id="app-root">
+  <header class="topbar">
+    <div class="topbar-row1">
+      <div class="topbar-group topbar-identity">
+        <div class="brand">🎵 Notorious B.P.M.</div>
+      </div>
+
+      <div class="topbar-group topbar-search-group">
+        <div class="search-wrap">
+          <input id="search" class="search" type="search" placeholder="Search artist, title, album… (or /command)" autocomplete="off">
+          <div id="search-suggestions" class="search-suggestions hidden"></div>
+        </div>
+        <div class="topbar-library-status">
+          <div class="stats-block">
+            <div class="stats" id="stats"></div>
+            <div class="current-folder" id="current-folder" title=""></div>
+          </div>
+          <button id="choose-folder" class="btn-secondary topbar-action-btn" title="Pick a different music folder to scan and use">📁 Folder</button>
+          <button id="rescan-library" class="btn-secondary topbar-action-btn" title="Re-scan the music folder for new/changed files">⟳ Rescan</button>
+          <div class="topbar-divider"></div>
+          <button id="convert-menu" class="btn-secondary topbar-action-btn" title="Convert selected tracks or a whole playlist to another format">⇄ Convert</button>
+        </div>
+      </div>
+
+      <div class="topbar-divider"></div>
+
+      <div class="topbar-group topbar-appearance" title="Player theme and stage controls">
+        <label class="topbar-group-label" for="theme-select">Theme</label>
+        <select id="theme-select" class="theme-select">
+          <option value="default">Default</option>
+          <option value="graphite">Graphite</option>
+          <option value="hifi">Hi-Fi</option>
+          <option value="cassette">Cassette</option>
+          <option value="vinyl">Vinyl</option>
+        </select>
+        <select id="wood-select" class="theme-select hidden" title="Turntable wood finish">
+          <option value="walnut">Walnut</option>
+          <option value="ebony">Ebony Oak</option>
+          <option value="mahogany">Mahogany</option>
+        </select>
+        <select id="cassette-design-select" class="theme-select hidden" title="Cassette shell design">
+          <option value="blue">Sky Blue Ribbon</option>
+          <option value="red">Brick Red Ribbon</option>
+          <option value="rust">Rust on Bone</option>
+        </select>
+        <select id="vu-color-select" class="theme-select hidden" title="VU meter lighting">
+          <option value="amber">Amber</option>
+          <option value="blue">Blue</option>
+          <option value="green">Green</option>
+        </select>
+        <button id="focus-mode-btn" class="btn-icon stage-toolbtn hidden" title="Focus mode — hide everything but the player">⤢</button>
+        <button id="popout-btn" class="btn-icon stage-toolbtn hidden" title="Pop out as a floating player">⧉</button>
+      </div>
+    </div>
+    <div class="tile-bar">
+      <div class="tile-group">
+        <button id="select-all-filtered" class="tile tile-blue" title="Select every track matching the current filters">
+          <span class="tile-icon">☑</span><span class="tile-label">Select All</span>
+        </button>
+        <button id="playlist-menu" class="tile tile-green" title="Add selected tracks (or every track matching the current filters) to a playlist">
+          <span class="tile-icon">🎵</span><span class="tile-label">+ Playlist</span>
+        </button>
+      </div>
+      <div class="tile-divider"></div>
+      <div class="tile-group">
+        <button id="open-tag-checker" class="tile tile-orange" title="Check for missing genre, album, or year tags and fix them">
+          <span class="tile-icon">🏷</span><span class="tile-label">Tag</span>
+        </button>
+        <button id="find-duplicates" class="tile tile-red" title="Remove duplicate Live/Remastered/Mix versions, keeping album tracks">
+          <span class="tile-icon">📑</span><span class="tile-label">Duplicates</span>
+        </button>
+        <button id="organize-by-artist" class="tile tile-magenta" title="Move every file on disk into a folder named after its Artist tag">
+          <span class="tile-icon">🗂</span><span class="tile-label">Organize</span>
+        </button>
+      </div>
+      <div class="tile-divider"></div>
+      <div class="tile-group">
+        <button id="radio-mode" class="tile tile-purple" title="Build a similar-tracks playlist from this track">
+          <span class="tile-icon">📻</span><span class="tile-label">Radio</span>
+        </button>
+        <button id="open-internet-radio" class="tile tile-blue" title="Browse and play live internet radio stations">
+          <span class="tile-icon">📡</span><span class="tile-label">Live Radio</span>
+        </button>
+      </div>
+      <div class="tile-group tile-group-end">
+        <a id="topbar-donate-link" class="tile tile-teal topbar-donate-link" href="https://paypal.me/IPecek"
+           rel="noopener noreferrer" title="Support Notorious B.P.M. (donationware — never required)">
+          <span class="tile-icon">💛</span><span class="tile-label">Support</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div id="sidebar-filters-wrap">
+      <div class="filter-group">
+        <label for="filter-genre">Genre <span class="filter-hint">(cmd/ctrl-click for multiple)</span></label>
+        <select id="filter-genre" multiple size="4"></select>
+      </div>
+      <div class="filter-group">
+        <label for="filter-decade">Decade <span class="filter-hint">(cmd/ctrl-click for multiple)</span></label>
+        <select id="filter-decade" multiple size="4"></select>
+      </div>
+      <div class="filter-group">
+        <label for="filter-language">Language</label>
+        <select id="filter-language"><option value="">All languages</option></select>
+      </div>
+      <div class="filter-group">
+        <label for="filter-artist">Artist</label>
+        <input list="artist-list" id="filter-artist" placeholder="Any artist">
+        <datalist id="artist-list"></datalist>
+      </div>
+      <div class="filter-group">
+        <label><input type="checkbox" id="filter-rated"> Rated only</label>
+      </div>
+      <div class="filter-group">
+        <label for="filter-rating">Rating</label>
+        <select id="filter-rating">
+          <option value="">Any rating</option>
+          <option value="1">★☆☆☆☆</option>
+          <option value="2">★★☆☆☆</option>
+          <option value="3">★★★☆☆</option>
+          <option value="4">★★★★☆</option>
+          <option value="5">★★★★★</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="sort">Sort by</label>
+        <select id="sort">
+          <option value="artist">Artist</option>
+          <option value="genre">Genre</option>
+          <option value="title">Title</option>
+          <option value="year">Year</option>
+          <option value="rating">Rating</option>
+        </select>
+      </div>
+      <button id="clear-filters" class="btn-secondary">Clear filters</button>
+      <button id="delete-rated-1" class="btn-secondary danger-btn hidden" title="Permanently delete every 1-star rated file from disk">🗑 Delete 1-star files</button>
+
+      <div class="sidebar-tools">
+        <button id="open-trash" class="btn-secondary">🗑 Trash</button>
+        <button id="open-stats" class="btn-secondary">📊 Stats</button>
+        <button id="open-export" class="btn-secondary">⇄ Backup</button>
+        <button id="open-help" class="btn-secondary">❓ Help</button>
+        <button id="open-about" class="btn-secondary">ℹ️ About</button>
+      </div>
+      </div>
+
+      <div class="playlists-section">
+        <div class="playlists-header">
+          <h3>Playlists</h3>
+          <div class="playlists-header-btns">
+            <button id="new-smart-playlist" class="btn-small" title="Rule-based playlist that stays up to date">+ Smart</button>
+            <button id="new-playlist" class="btn-small">+ New</button>
+          </div>
+        </div>
+        <ul id="smart-playlist-list" class="playlist-list"></ul>
+        <ul id="playlist-list" class="playlist-list"></ul>
+      </div>
+    </aside>
+
+    <main class="main" id="main-scroll">
+      <div id="selection-toolbar" class="selection-toolbar hidden">
+        <span id="selection-count">0 selected</span>
+        <button id="selection-add-to-playlist" class="btn-small">+ Add to playlist</button>
+        <button id="selection-queue" class="btn-small">▸ Add to queue</button>
+        <button id="selection-edit-tags" class="btn-small">🏷 Edit tags</button>
+        <button id="selection-convert" class="btn-small">⇄ Convert</button>
+        <button id="selection-clear" class="btn-small btn-secondary">Clear</button>
+      </div>
+
+      <div id="playlist-view" class="playlist-view hidden">
+        <div class="playlist-view-header">
+          <button id="back-to-library" class="btn-small">&larr; Library</button>
+          <h2 id="playlist-view-title"></h2>
+          <button id="convert-playlist" class="btn-small" title="Convert every track in this playlist to another format">⇄ Convert all</button>
+          <button id="delete-playlist" class="btn-small danger">Delete playlist</button>
+        </div>
+        <div id="playlist-tracks" class="track-list"></div>
+      </div>
+
+      <div id="library-view" class="track-list-wrap">
+        <div id="track-list" class="track-list"></div>
+        <div id="load-sentinel" class="load-sentinel"></div>
+      </div>
+    </main>
+
+    <aside id="theme-stage" class="theme-stage hidden">
+    <button id="stage-exit-focus" class="stage-exit-btn hidden" title="Exit focus mode">✕</button>
+    <div id="stage-hifi" class="stage-panel hidden">
+      <div class="hifi-panel">
+        <div class="hifi-art-frame">
+          <img id="hifi-art" class="hifi-art hidden" alt="">
+        </div>
+        <div class="vu-rect-row">
+          <div class="vu-rect">
+            <div class="vu-rect-face">
+              <svg class="vu-scale-svg" viewBox="0 0 200 100" preserveAspectRatio="none">
+                <path d="M 16.1 75.3 A 105 105 0 0 1 112.0 13.0" fill="none" stroke="#1a1207" stroke-width="1.8"/>
+                <path d="M 112.0 13.0 A 105 105 0 0 1 173.7 33.1" fill="none" stroke="#8a1c10" stroke-width="1.8"/>
+                <line x1="28.0" y1="80.6" x2="16.1" y2="75.3" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="39.8" y="85.9" font-size="12" text-anchor="middle" fill="#1a1207">20</text>
+                <line x1="39.5" y1="61.4" x2="29.3" y2="53.4" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="49.7" y="69.4" font-size="12" text-anchor="middle" fill="#1a1207">10</text>
+                <line x1="50.4" y1="49.6" x2="41.7" y2="40.0" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="59.1" y="59.3" font-size="12" text-anchor="middle" fill="#1a1207">7</text>
+                <line x1="61.9" y1="40.8" x2="54.8" y2="29.9" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="69.0" y="51.7" font-size="12" text-anchor="middle" fill="#1a1207">5</text>
+                <line x1="76.1" y1="33.3" x2="71.0" y2="21.3" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="81.1" y="45.3" font-size="12" text-anchor="middle" fill="#1a1207">3</text>
+                <line x1="86.6" y1="29.6" x2="83.1" y2="17.1" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="90.2" y="42.1" font-size="12" text-anchor="middle" fill="#1a1207">2</text>
+                <line x1="99.2" y1="26.9" x2="97.4" y2="14.0" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="101.0" y="39.8" font-size="12" text-anchor="middle" fill="#1a1207">1</text>
+                <line x1="112.0" y1="26.0" x2="112.0" y2="13.0" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="112.0" y="39.0" font-size="12" text-anchor="middle" fill="#8a1c10">0</text>
+                <line x1="131.1" y1="28.0" x2="133.8" y2="15.3" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="128.4" y="40.7" font-size="12" text-anchor="middle" fill="#8a1c10">1</text>
+                <line x1="149.4" y1="34.0" x2="154.7" y2="22.1" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="144.1" y="45.8" font-size="12" text-anchor="middle" fill="#8a1c10">2</text>
+                <line x1="166.1" y1="43.6" x2="173.7" y2="33.1" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="158.4" y="54.1" font-size="12" text-anchor="middle" fill="#8a1c10">3</text>
+                <circle cx="28.9" cy="68.0" r="1.1" fill="#1a1207"/>
+                <circle cx="41.1" cy="51.8" r="1.1" fill="#1a1207"/>
+                <circle cx="53.0" cy="41.0" r="1.1" fill="#1a1207"/>
+                <circle cx="66.5" cy="32.4" r="1.1" fill="#1a1207"/>
+                <circle cx="79.6" cy="26.6" r="1.1" fill="#1a1207"/>
+                <circle cx="91.8" cy="23.1" r="1.1" fill="#1a1207"/>
+                <circle cx="105.2" cy="21.2" r="1.1" fill="#1a1207"/>
+                <circle cx="118.8" cy="21.2" r="1.1" fill="#1a1207"/>
+                <circle cx="142.0" cy="25.7" r="1.1" fill="#1a1207"/>
+                <circle cx="160.5" cy="34.0" r="1.1" fill="#1a1207"/>
+                <text x="14.9" y="90.2" font-size="15" font-weight="700" text-anchor="middle" fill="#1a1207">-</text>
+                <text x="184.7" y="47.8" font-size="15" font-weight="700" text-anchor="middle" fill="#1a1207">+</text>
+                <text x="112" y="98" font-size="16" font-weight="700" letter-spacing="1.5" text-anchor="middle" fill="#3a2a10">dB</text>
+              </svg>
+              <div class="vu-needle-rect" id="vu-needle-l"></div>
+              <div class="vu-channel-tag">L</div>
+            </div>
+          </div>
+          <div class="vfd-display">
+            <div class="vfd-line" id="hifi-vfd-artist">- - - - - - - -</div>
+            <div class="vfd-line" id="hifi-vfd-title">- - - - - - - -</div>
+          </div>
+          <div class="vu-rect">
+            <div class="vu-rect-face">
+              <svg class="vu-scale-svg" viewBox="0 0 200 100" preserveAspectRatio="none">
+                <path d="M 16.1 75.3 A 105 105 0 0 1 112.0 13.0" fill="none" stroke="#1a1207" stroke-width="1.8"/>
+                <path d="M 112.0 13.0 A 105 105 0 0 1 173.7 33.1" fill="none" stroke="#8a1c10" stroke-width="1.8"/>
+                <line x1="28.0" y1="80.6" x2="16.1" y2="75.3" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="39.8" y="85.9" font-size="12" text-anchor="middle" fill="#1a1207">20</text>
+                <line x1="39.5" y1="61.4" x2="29.3" y2="53.4" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="49.7" y="69.4" font-size="12" text-anchor="middle" fill="#1a1207">10</text>
+                <line x1="50.4" y1="49.6" x2="41.7" y2="40.0" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="59.1" y="59.3" font-size="12" text-anchor="middle" fill="#1a1207">7</text>
+                <line x1="61.9" y1="40.8" x2="54.8" y2="29.9" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="69.0" y="51.7" font-size="12" text-anchor="middle" fill="#1a1207">5</text>
+                <line x1="76.1" y1="33.3" x2="71.0" y2="21.3" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="81.1" y="45.3" font-size="12" text-anchor="middle" fill="#1a1207">3</text>
+                <line x1="86.6" y1="29.6" x2="83.1" y2="17.1" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="90.2" y="42.1" font-size="12" text-anchor="middle" fill="#1a1207">2</text>
+                <line x1="99.2" y1="26.9" x2="97.4" y2="14.0" stroke="#1a1207" stroke-width="1.5"/>
+                <text x="101.0" y="39.8" font-size="12" text-anchor="middle" fill="#1a1207">1</text>
+                <line x1="112.0" y1="26.0" x2="112.0" y2="13.0" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="112.0" y="39.0" font-size="12" text-anchor="middle" fill="#8a1c10">0</text>
+                <line x1="131.1" y1="28.0" x2="133.8" y2="15.3" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="128.4" y="40.7" font-size="12" text-anchor="middle" fill="#8a1c10">1</text>
+                <line x1="149.4" y1="34.0" x2="154.7" y2="22.1" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="144.1" y="45.8" font-size="12" text-anchor="middle" fill="#8a1c10">2</text>
+                <line x1="166.1" y1="43.6" x2="173.7" y2="33.1" stroke="#8a1c10" stroke-width="1.5"/>
+                <text x="158.4" y="54.1" font-size="12" text-anchor="middle" fill="#8a1c10">3</text>
+                <circle cx="28.9" cy="68.0" r="1.1" fill="#1a1207"/>
+                <circle cx="41.1" cy="51.8" r="1.1" fill="#1a1207"/>
+                <circle cx="53.0" cy="41.0" r="1.1" fill="#1a1207"/>
+                <circle cx="66.5" cy="32.4" r="1.1" fill="#1a1207"/>
+                <circle cx="79.6" cy="26.6" r="1.1" fill="#1a1207"/>
+                <circle cx="91.8" cy="23.1" r="1.1" fill="#1a1207"/>
+                <circle cx="105.2" cy="21.2" r="1.1" fill="#1a1207"/>
+                <circle cx="118.8" cy="21.2" r="1.1" fill="#1a1207"/>
+                <circle cx="142.0" cy="25.7" r="1.1" fill="#1a1207"/>
+                <circle cx="160.5" cy="34.0" r="1.1" fill="#1a1207"/>
+                <text x="14.9" y="90.2" font-size="15" font-weight="700" text-anchor="middle" fill="#1a1207">-</text>
+                <text x="184.7" y="47.8" font-size="15" font-weight="700" text-anchor="middle" fill="#1a1207">+</text>
+                <text x="112" y="98" font-size="16" font-weight="700" letter-spacing="1.5" text-anchor="middle" fill="#3a2a10">dB</text>
+              </svg>
+              <div class="vu-needle-rect" id="vu-needle-r"></div>
+              <div class="vu-channel-tag">R</div>
+            </div>
+          </div>
+        </div>
+        <input id="hifi-seek" type="range" min="0" max="100" value="0" class="hifi-progress">
+
+        <div class="hifi-transport">
+          <button id="hifi-prev" class="hifi-btn" title="Previous track">⏮</button>
+          <button id="hifi-play-pause" class="hifi-btn hifi-btn-play" title="Play/Pause">▶</button>
+          <button id="hifi-next" class="hifi-btn" title="Next similar track">⏭</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stage-cassette" class="stage-panel hidden">
+      <div class="cassette-shell">
+        <div class="cassette-art-frame">
+          <img id="cassette-art" class="cassette-art hidden" alt="">
+        </div>
+
+        <div class="cassette-visual">
+        <svg class="cassette-svg" viewBox="0 0 445 285" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <linearGradient id="casShellGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#232323"/>
+              <stop offset="100%" stop-color="#111"/>
+            </linearGradient>
+            <!-- Alternate shell finishes, picked via the Cassette design
+                 select (see #cassette-design-select in app.js) -- CSS
+                 switches which of these a given design's .cas-shell
+                 references, same pattern as the vinyl theme's wood-grain
+                 picker. Reels/window/tape-ring are untouched by any of
+                 this -- only the shell and label/band layer vary. -->
+            <linearGradient id="casShellGrad-rust" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#f2ede0"/>
+              <stop offset="100%" stop-color="#d9d0ba"/>
+            </linearGradient>
+            <radialGradient id="casScrewGrad" cx="35%" cy="35%">
+              <stop offset="0%" stop-color="#e8e8e8"/>
+              <stop offset="100%" stop-color="#8a8a8a"/>
+            </radialGradient>
+            <linearGradient id="casWindowGrad" x1="20%" y1="0%" x2="80%" y2="100%">
+              <stop offset="0%" stop-color="#5c5c5c"/>
+              <stop offset="45%" stop-color="#4a4a4a"/>
+              <stop offset="100%" stop-color="#5c5c5c"/>
+            </linearGradient>
+            <clipPath id="casWindowClip">
+              <rect x="93" y="96" width="259" height="71" rx="10"/>
+            </clipPath>
+          </defs>
+
+          <rect class="cas-shell" x="8" y="8" width="429" height="269" rx="24" fill="url(#casShellGrad)"/>
+
+          <g class="cas-screw" transform="translate(31,23)">
+            <circle r="6" fill="url(#casScrewGrad)"/>
+            <line x1="-3.3" y1="0" x2="3.3" y2="0"/><line x1="0" y1="-3.3" x2="0" y2="3.3"/>
+          </g>
+          <g class="cas-screw" transform="translate(414,23)">
+            <circle r="6" fill="url(#casScrewGrad)"/>
+            <line x1="-3.3" y1="0" x2="3.3" y2="0"/><line x1="0" y1="-3.3" x2="0" y2="3.3"/>
+          </g>
+          <g class="cas-screw" transform="translate(31,262)">
+            <circle r="6" fill="url(#casScrewGrad)"/>
+            <line x1="-3.3" y1="0" x2="3.3" y2="0"/><line x1="0" y1="-3.3" x2="0" y2="3.3"/>
+          </g>
+          <g class="cas-screw" transform="translate(414,262)">
+            <circle r="6" fill="url(#casScrewGrad)"/>
+            <line x1="-3.3" y1="0" x2="3.3" y2="0"/><line x1="0" y1="-3.3" x2="0" y2="3.3"/>
+          </g>
+          <g class="cas-screw" transform="translate(222,258)">
+            <circle r="6" fill="url(#casScrewGrad)"/>
+            <line x1="-3.3" y1="0" x2="3.3" y2="0"/><line x1="0" y1="-3.3" x2="0" y2="3.3"/>
+          </g>
+
+          <rect class="cas-label-bg" x="33" y="30" width="373" height="64" rx="6"/>
+          <line class="cas-ruled-line" x1="41" y1="54" x2="406" y2="54"/>
+          <line class="cas-ruled-line" x1="41" y1="77" x2="406" y2="77"/>
+
+          <rect class="cas-color-band" x="33" y="96" width="373" height="71"/>
+          <text class="cas-side-label" x="45" y="122">SIDE</text>
+          <rect class="cas-side-box" x="41" y="130" width="13" height="13"/>
+          <text class="cas-min-text" x="400" y="124" text-anchor="end">60 MIN / SIDE</text>
+          <rect class="cas-window" x="93" y="96" width="259" height="71" rx="10"/>
+
+          <g clip-path="url(#casWindowClip)">
+            <g id="reel-left" class="cas-reel" style="transform-origin: 134px 131px;">
+              <circle class="cas-tape-ring" id="reel-tape-left" cx="134" cy="131" r="46.1" stroke-width="51.8"/>
+              <circle class="cas-hub-base" cx="134" cy="131" r="13.4"/>
+              <g transform="translate(134,131)">
+                <rect class="cas-hub-tab" transform="rotate(0) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(45) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(90) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(135) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(180) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(225) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(270) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(315) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+              </g>
+              <circle class="cas-hub-cap" cx="134" cy="131" r="5.6"/>
+            </g>
+          </g>
+          <g clip-path="url(#casWindowClip)">
+            <g id="reel-right" class="cas-reel" style="transform-origin: 311px 131px;">
+              <circle class="cas-tape-ring" id="reel-tape-right" cx="311" cy="131" r="20.2" stroke-width="0"/>
+              <circle class="cas-hub-base" cx="311" cy="131" r="13.4"/>
+              <g transform="translate(311,131)">
+                <rect class="cas-hub-tab" transform="rotate(0) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(45) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(90) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(135) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(180) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(225) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(270) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+                <rect class="cas-hub-tab" transform="rotate(315) translate(0,-13.4)" x="-3.4" y="-5.05" width="6.7" height="10.1" rx="1.8"/>
+              </g>
+              <circle class="cas-hub-cap" cx="311" cy="131" r="5.6"/>
+            </g>
+          </g>
+
+          <rect class="cas-info-bg" x="33" y="168" width="373" height="38" rx="4"/>
+          <text x="398" y="199" text-anchor="end"><tspan class="cas-min-solid">120</tspan><tspan class="cas-min-suffix" dx="4">MIN.</tspan></text>
+
+          <circle class="cas-hole" cx="120" cy="258" r="10"/>
+          <rect class="cas-hole-slot" x="157" y="249" width="14" height="18" rx="2"/>
+          <rect class="cas-hole-slot" x="273" y="249" width="14" height="18" rx="2"/>
+          <circle class="cas-hole" cx="324" cy="258" r="10"/>
+        </svg>
+
+        <div class="cassette-handwriting cassette-hw-artist" id="cassette-hw-artist"></div>
+        <div class="cassette-handwriting cassette-hw-title" id="cassette-hw-title"></div>
+        </div>
+
+        <div class="cassette-visualizer" id="cassette-visualizer"></div>
+
+        <input id="cassette-seek" type="range" min="0" max="100" value="0" class="cassette-progress">
+
+        <div class="cassette-transport">
+          <button id="cassette-prev" class="cassette-switch" title="Previous track">⏮</button>
+          <button id="cassette-play-pause" class="cassette-switch cassette-switch-play" title="Play/Pause">▶</button>
+          <button id="cassette-next" class="cassette-switch" title="Next similar track">⏭</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stage-vinyl" class="stage-panel hidden">
+      <div class="turntable">
+        <div class="turntable-body">
+          <div class="turntable-row">
+            <div class="turntable-plate">
+              <div class="vinyl-disc" id="vinyl-disc">
+                <div class="vinyl-spindle"></div>
+              </div>
+              <div class="tonearm" id="tonearm">
+                <div class="tonearm-base"></div>
+                <div class="tonearm-seg1">
+                  <div class="tonearm-seg2">
+                    <div class="tonearm-headshell"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="vinyl-rail">
+              <div class="vinyl-fader-group">
+                <span class="vinyl-fader-label">Track</span>
+                <div class="vinyl-fader-track">
+                  <input id="vinyl-seek" type="range" min="0" max="100" value="0" class="vinyl-fader">
+                </div>
+              </div>
+              <div class="vinyl-fader-group">
+                <span class="vinyl-fader-label">Vol</span>
+                <div class="vinyl-fader-track">
+                  <input id="vinyl-volume" type="range" min="0" max="100" value="100" class="vinyl-fader vinyl-fader-vol">
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="vinyl-nameplate">
+            <div class="vinyl-nameplate-line vinyl-nameplate-artist" id="vinyl-np-artist"></div>
+            <div class="vinyl-nameplate-line vinyl-nameplate-title" id="vinyl-np-title"></div>
+          </div>
+        </div>
+
+        <div class="vinyl-transport">
+          <button id="vinyl-prev" class="vinyl-btn" title="Previous track">⏮</button>
+          <button id="vinyl-play-pause" class="vinyl-btn vinyl-btn-play" title="Play/Pause">▶</button>
+          <button id="vinyl-next" class="vinyl-btn" title="Next similar track">⏭</button>
+        </div>
+      </div>
+    </div>
+    </aside>
+  </div>
+
+  <footer class="player-bar">
+    <div class="now-playing">
+      <img id="np-art" class="np-art hidden" alt="">
+      <div class="np-text">
+        <div class="np-title" id="np-title">Nothing playing</div>
+        <div class="np-sub" id="np-sub"></div>
+      </div>
+      <button id="lyrics-btn" class="btn-icon" title="Lyrics (L)">📜</button>
+      <button id="art-fetch-btn" class="btn-icon hidden" title="Fetch cover art">🖼</button>
+      <button id="radio-identify-btn" class="btn-icon hidden" title="Identify this song (Shazam-style, via AcoustID)">🔍</button>
+    </div>
+    <div class="player-controls">
+      <button id="prev-track" class="btn-icon" title="Previous (P)">⏮</button>
+      <button id="play-pause" class="btn-icon" title="Play/Pause (Space)">▶</button>
+      <button id="skip-next" class="btn-icon" title="Next (N)">⏭</button>
+      <button id="shuffle-toggle" class="btn-icon" title="Shuffle (S)">🔀</button>
+      <label class="autoplay-toggle">
+        <input type="checkbox" id="autoplay-similar">
+        Auto-play similar next
+      </label>
+      <audio id="audio" preload="metadata"></audio>
+      <input id="seek" type="range" min="0" max="100" value="0" class="seek">
+      <span id="time-display" class="time-display">0:00 / 0:00</span>
+      <span class="volume-control" title="Volume">
+        <span id="volume-icon">🔊</span>
+        <input id="volume-slider" type="range" min="0" max="100" value="100">
+      </span>
+      <button id="airplay-btn" class="btn-icon hidden" title="Stream to AirPlay device">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"/>
+          <polygon points="12 15 17 21 7 21 12 15"/>
+        </svg>
+      </button>
+    </div>
+    <div class="rating-controls">
+      <button id="queue-btn" class="btn-small" title="Up next (Q)">Queue</button>
+      <span class="rate-label">Rate:</span>
+      <span id="stars" class="stars">
+        <span data-star="1">★</span><span data-star="2">★</span><span data-star="3">★</span><span data-star="4">★</span><span data-star="5">★</span>
+      </span>
+    </div>
+  </footer>
+</div>
+
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <h3 id="modal-title">New playlist</h3>
+    <div id="modal-body"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn-secondary">Cancel</button>
+      <button id="modal-ok" class="btn-primary">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="dup-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>Remove duplicates</h3>
+      <button id="dup-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p id="dup-summary" class="dup-summary-text">Scanning your library for duplicates…</p>
+      <button id="dup-clean-btn" class="btn-primary dup-clean-btn hidden">Remove duplicates</button>
+      <button id="dup-toggle-details" class="btn-small dup-toggle-details hidden">Show details</button>
+      <div id="dup-details" class="dup-details hidden"></div>
+      <button id="dup-review-open" class="btn-secondary dup-clean-btn hidden">Review remaining duplicates</button>
+    </div>
+  </div>
+</div>
+
+<div id="dup-review-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel dup-review-panel">
+    <div class="dup-panel-header">
+      <h3>Review remaining duplicates</h3>
+      <button id="dup-review-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div id="dup-review-bulk-bar" class="dup-review-bulk-bar hidden">
+      <span id="dup-review-selected-count"></span>
+      <button id="dup-review-select-none" class="btn-small">Clear selection</button>
+      <button id="dup-review-delete-selected" class="btn-primary btn-small">Delete selected</button>
+    </div>
+    <div class="dup-body">
+      <p class="dup-summary-text">
+        Same song, multiple copies, but nothing safe to guess about which one to keep — album,
+        year, and duration are shown for each so you can tell them apart. Check the ones you don't
+        want (at least one copy per song always stays) and delete them together, or one at a time.
+        Deleting sends a file to Trash, not gone for good.
+      </p>
+      <p id="dup-review-count" class="dup-summary-note"></p>
+      <div id="dup-review-list"></div>
+      <button id="dup-review-load-more" class="btn-secondary dup-review-load-more hidden">Load more</button>
+    </div>
+  </div>
+</div>
+
+<div id="tags-backdrop" class="modal-backdrop hidden">
+  <div class="tags-panel">
+    <div class="dup-panel-header">
+      <h3>Tag checker</h3>
+      <button id="tags-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="tags-body">
+      <div class="tags-checklist">
+        <label><input type="checkbox" id="check-genre" checked> Missing genre</label>
+        <label><input type="checkbox" id="check-album" checked> Missing album</label>
+        <label><input type="checkbox" id="check-year" checked> Missing year</label>
+      </div>
+      <button id="tags-scan-btn" class="btn-primary">Scan library</button>
+      <div id="tags-results" class="tags-results"></div>
+
+      <div class="tags-deep-divider"></div>
+      <div class="tags-deep-header">
+        <strong>Deep scan</strong>
+        <p class="tags-deep-note">
+          Reads every file's tags directly to catch a missing artist, title, or cover art —
+          the fast scan above can't see these, since a missing artist or title normally falls
+          back to the folder or file name. Can take several minutes for a large library.
+        </p>
+      </div>
+      <div class="tags-checklist">
+        <label><input type="checkbox" id="check-artist" checked> Missing artist tag</label>
+        <label><input type="checkbox" id="check-title" checked> Missing title tag</label>
+        <label><input type="checkbox" id="check-art" checked> Missing cover art</label>
+      </div>
+      <button id="tags-deepscan-btn" class="btn-secondary">Run deep scan</button>
+      <div id="tags-deep-results" class="tags-results"></div>
+
+      <div class="tags-deep-divider"></div>
+      <div class="tags-deep-header">
+        <strong>Release years</strong>
+        <p class="tags-deep-note">
+          A remastered, deluxe, or "Greatest Hits"-style file is usually tagged with that
+          edition's date, not the song's real release year — and this library has no separate
+          "original date" tag to fall back to. This looks up every matching pressing on Deezer
+          and corrects the year to the earliest one found, since a reissue is always later than
+          the original. Runs across your whole library, which can take a couple of hours —
+          it runs in the background, so the app stays usable while it works.
+        </p>
+      </div>
+      <button id="fix-years-btn" class="btn-secondary">Fix release years</button>
+      <div id="fix-years-result" class="dup-summary-note"></div>
+
+      <div class="tags-deep-divider"></div>
+      <div class="tags-deep-header">
+        <strong>One genre per artist</strong>
+        <p class="tags-deep-note">
+          Genre usually comes from whatever a given album was tagged with, so the same artist can
+          end up with a different genre per album (or even per track). This finds each artist's
+          most common genre and applies it to every one of their tracks, so genre stays consistent
+          regardless of which album a track came from. Only artists with a real disagreement are
+          touched — nothing changes for artists that already agree.
+        </p>
+      </div>
+      <button id="unify-genre-btn" class="btn-secondary">Unify genre per artist</button>
+      <div id="unify-genre-result" class="dup-summary-note"></div>
+
+      <div class="tags-deep-divider"></div>
+      <div class="tags-deep-header">
+        <strong>Artist &amp; track names</strong>
+        <p class="tags-deep-note">
+          Corrects artist and title spelling/capitalization against Deezer's catalog — the same idea
+          as MusicBrainz Picard matching your files against a reference database, using Deezer instead
+          of MusicBrainz since Deezer has no rate limit and MusicBrainz's would turn a full library into
+          a multi-hour job. Only fixes formatting (casing, stray spaces, a missing "The", ...) — it never
+          reattributes a track to a different artist, always keeps any "(Live)"/"(Remastered)"-style
+          suffix exactly as it was, and skips live/rehearsal/demo recordings entirely, since those are
+          too easy to mismatch against a different performance of the same song. Runs across your whole
+          library in the background, same as release years above.
+        </p>
+      </div>
+      <button id="fix-artist-title-btn" class="btn-secondary">Fix artist &amp; track names</button>
+      <div id="fix-artist-title-result" class="dup-summary-note"></div>
+    </div>
+  </div>
+</div>
+
+<div id="queue-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>Up next</h3>
+      <button id="queue-clear-btn" class="btn-small">Clear</button>
+      <button id="queue-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <div id="queue-list" class="tags-results"></div>
+    </div>
+  </div>
+</div>
+
+<div id="trash-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>Trash</h3>
+      <button id="trash-empty-btn" class="btn-small danger-btn">Empty trash</button>
+      <button id="trash-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p class="dup-summary-text">Deleted files land here instead of being erased outright — restore one, or empty the trash for good.</p>
+      <div id="trash-list" class="tags-results"></div>
+    </div>
+  </div>
+</div>
+
+<div id="stats-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>Listening stats</h3>
+      <button id="stats-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body" id="stats-body"></div>
+  </div>
+</div>
+
+<div id="help-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel help-panel">
+    <div class="dup-panel-header">
+      <h3>Help</h3>
+      <button id="help-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body help-body">
+      <p class="help-intro">
+        Most buttons have a tooltip if you hover over them — this covers
+        the things that aren't obvious from that alone.
+      </p>
+
+      <h4>🗂 Organize by Artist</h4>
+      <p>
+        Physically moves every file on disk into a folder named after its
+        Artist tag — this is a real file move, not just a display change.
+        A backup of your library index is taken automatically first, and
+        ratings/playlists are preserved (they follow the file to its new
+        location), but the file move itself isn't something the app can
+        undo. Files already correctly placed are left alone.
+      </p>
+
+      <h4>📡 Live Radio</h4>
+      <p>
+        Browse and play public internet radio stations (via the free
+        Radio Browser directory). Two extra buttons appear once a station
+        is playing:
+      </p>
+      <p>
+        <strong>🎯 Match My Library</strong> looks at your library's most
+        common genre and finds stations playing similar music — no setup
+        needed.
+      </p>
+      <p>
+        <strong>🔍 Identify this song</strong> is Shazam-style song
+        recognition, for stations that don't report what's currently
+        playing. It needs two things installed/configured once: the free
+        <code>chromaprint</code> tool, and a free AcoustID API key (the
+        button walks you through getting one the first time you use it).
+      </p>
+
+      <h4>⤢ Focus mode / ⧉ Pop-out</h4>
+      <p>
+        Focus mode shrinks the window down to just the player, hiding the
+        library browser — handy for a small, out-of-the-way now-playing
+        widget. Pop-out does the same thing but as a separate floating
+        window instead of resizing the main one.
+      </p>
+
+      <h4>⇄ Backup / Import</h4>
+      <p>
+        Exports your ratings and playlists to a file you choose (not your
+        music files themselves — just the data about them, matched back up
+        by file path on import). The app also does this automatically to a
+        rotating backup every time it closes, so switching music folders
+        or a bad rescan is always recoverable.
+      </p>
+
+      <h4>🗑 Trash</h4>
+      <p>
+        Deleting a track sends the file to Trash, not gone for good — it
+        can be restored from the Trash panel.
+      </p>
+
+      <h4>🏷 Tag / 📑 Duplicates</h4>
+      <p>
+        Tag scans your library for missing genre, album, year, artist, or
+        cover art, with a one-click Deezer lookup for missing genres.
+        Duplicates finds Live/Remastered/Mix versions of the same song and
+        helps you clean them up, keeping the original album version.
+      </p>
+
+      <h4>Playlists vs. Smart Playlists</h4>
+      <p>
+        A regular playlist is a fixed list of tracks you added yourself.
+        A Smart Playlist is a saved filter (e.g. "5-star Rock from the
+        90s") that stays live — it always reflects whatever currently
+        matches, even for tracks added later.
+      </p>
+    </div>
+  </div>
+</div>
+
+<div id="about-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>About Notorious B.P.M.</h3>
+      <button id="about-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body about-body">
+      <p class="about-copyright">© 2026 Ivan Pecek. All rights reserved.</p>
+      <p>
+        Notorious B.P.M. is donationware: free to use, not for resale or
+        redistribution as someone else's product. See the LICENSE file
+        included with the app for the full terms.
+      </p>
+      <p>
+        If you're enjoying it, donations are welcome (never required) at:
+      </p>
+      <a id="about-donate-link" class="btn-primary about-donate-btn"
+         href="https://paypal.me/IPecek" rel="noopener noreferrer">
+        💛 Support via PayPal
+      </a>
+    </div>
+  </div>
+</div>
+
+<div id="lyrics-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3 id="lyrics-title">Lyrics</h3>
+      <button id="lyrics-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body" id="lyrics-body"></div>
+  </div>
+</div>
+
+<div id="radio-backdrop" class="modal-backdrop hidden">
+  <div class="radio-panel">
+    <div class="dup-panel-header">
+      <h3>Live Radio</h3>
+      <button id="radio-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="radio-match-row">
+      <button id="radio-match-btn" class="btn-secondary" title="Find live stations playing music similar to what's in your library">🎯 Match My Library</button>
+      <span id="radio-match-msg" class="radio-match-msg"></span>
+    </div>
+    <div class="radio-filters">
+      <select id="radio-genre">
+        <option value="">Any genre</option>
+      </select>
+      <select id="radio-country">
+        <option value="">Any location</option>
+      </select>
+      <select id="radio-sort">
+        <option value="votes">Most popular</option>
+        <option value="clickcount">Most listened right now</option>
+      </select>
+    </div>
+    <div class="radio-body" id="radio-results">
+      <div class="tags-empty">Loading stations…</div>
+    </div>
+  </div>
+</div>
+
+<div id="export-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>Backup your library data</h3>
+      <button id="export-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p class="dup-summary-text">Ratings and playlists live in the local index, not your files — export them so they survive a fresh install or a move to another machine.</p>
+      <button id="export-btn" class="btn-primary">Export ratings + playlists</button>
+      <div class="tags-deep-divider"></div>
+      <p class="dup-summary-text">Import a previously exported file. Tracks are matched by file path, so this works best against the same library.</p>
+      <input type="file" id="import-file-input" accept="application/json">
+      <div id="import-result" class="dup-summary-note"></div>
+    </div>
+  </div>
+</div>
+
+<div id="smart-playlist-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>New smart playlist</h3>
+      <button id="smart-playlist-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <div class="filter-group">
+        <label for="smart-name">Name</label>
+        <input type="text" id="smart-name" placeholder="e.g. Five-star 90s Rock">
+      </div>
+      <div class="filter-group">
+        <label for="smart-rating">Minimum rating</label>
+        <select id="smart-rating">
+          <option value="">Any</option>
+          <option value="1">★☆☆☆☆ or better</option>
+          <option value="2">★★☆☆☆ or better</option>
+          <option value="3">★★★☆☆ or better</option>
+          <option value="4">★★★★☆ or better</option>
+          <option value="5">★★★★★ only</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="smart-genre">Genre</label>
+        <select id="smart-genre"><option value="">Any genre</option></select>
+      </div>
+      <div class="filter-group">
+        <label for="smart-decade">Decade</label>
+        <select id="smart-decade"><option value="">Any decade</option></select>
+      </div>
+      <button id="smart-playlist-create-btn" class="btn-primary">Create</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

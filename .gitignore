@@ -1,0 +1,40 @@
+# Personal data / library index -- never belongs in version control
+library.db
+library-*.db
+*.lyrics.json
+config.json
+
+# Build artifacts (regenerate with build_macos.sh / pyinstaller *.spec)
+dist/
+dist-macos/
+dist-macos-new/
+build/
+build-macos-new/
+*.dmg
+*.exe
+*.AppImage
+*.AppDir/
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+*.egg-info/
+
+# Editor / OS cruft
+.DS_Store
+.claude/
+.vscode/
+.idea/
+
+# Personal one-off library-maintenance scripts (specific to this machine's
+# own deemix-downloaded library layout) and the legacy pre-PyInstaller
+# shell launcher -- neither is part of the shipped app, kept locally only
+flatten_by_artist.py
+rename_cleanup.py
+launcher/

@@ -1,0 +1,1813 @@
+/* Bundled locally (not loaded from Google Fonts) so the brand wordmark
+   renders correctly with no network connection -- everything else in this
+   app already works fully offline, and the logo shouldn't be the exception.
+   Oswald is SIL Open Font License, free to bundle and ship. */
+@font-face {
+  font-family: "Oswald";
+  src: url("fonts/Oswald.ttf") format("truetype");
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --bg: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-hover: #232323;
+  --border: #2b2b2b;
+  --text: #f2f2f2;
+  --text-dim: #949494;
+  --accent: #2D89EF;
+  --accent-dim: #1c3f6e;
+  --star: #ffb900;
+  --danger: #e51400;
+  --radius: 0px;
+
+  /* Metro / Windows Phone tile palette */
+  --tile-blue: #2D89EF;
+  --tile-green: #00A300;
+  --tile-purple: #7E3878;
+  --tile-teal: #00ABA9;
+  --tile-orange: #F09609;
+  --tile-magenta: #D80073;
+  --tile-red: #A20025;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  position: relative;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.topbar-row1 {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 16px 10px;
+  flex-wrap: wrap;
+}
+
+/* Four clusters, left to right: who (brand), what you're looking at
+   (search + stats), how the toolbar behaves (layout), how it looks
+   (theme + the stage controls that only matter for the current theme). */
+.topbar-group { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.topbar-search-group { flex: 1; min-width: 220px; gap: 16px; }
+.topbar-group-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.topbar-divider { width: 1px; align-self: stretch; background: var(--border); flex-shrink: 0; }
+
+.topbar-donate-link { text-decoration: none; }
+
+.brand {
+  font-family: "Oswald", "Futura", "Century Gothic", sans-serif;
+  font-weight: 700; font-size: 19px; white-space: nowrap; letter-spacing: .01em;
+  text-transform: uppercase;
+}
+
+.search-wrap { position: relative; flex: 1; max-width: 480px; }
+.search {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+.search:focus { outline: none; border-color: var(--accent); }
+
+.search-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 2px 2px 10px rgba(0,0,0,.35);
+  overflow: hidden;
+}
+.search-suggestion {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.search-suggestion:hover, .search-suggestion.active { background: var(--bg-hover); }
+.search-suggestion .cmd { font-family: monospace; color: var(--accent); }
+.search-suggestion .lbl { color: var(--text-dim); }
+
+.topbar-library-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.stats-block { text-align: right; }
+.topbar-action-btn {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 12px;
+  height: 30px;
+  padding: 0 10px;
+  box-sizing: border-box;
+}
+.stats { color: var(--text-dim); font-size: 12px; }
+.current-folder {
+  color: var(--text-dim);
+  font-size: 10px;
+  opacity: .7;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------- Metro-style tile bar -- */
+.tile-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 16px 10px;
+  overflow-x: auto;
+}
+.tile-group { display: flex; gap: 4px; flex-shrink: 0; }
+.tile-group-end { margin-left: auto; }
+.tile-divider { width: 1px; background: var(--border); margin: 4px 8px; flex-shrink: 0; }
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 70px;
+  height: 58px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 0;
+  color: #fff;
+  cursor: pointer;
+  padding: 4px 3px;
+  transition: filter .08s ease, transform .06s ease;
+}
+.tile:hover { filter: brightness(1.15); }
+.tile:active { transform: scale(0.95); }
+.tile:disabled { opacity: .45; cursor: default; filter: none; transform: none; }
+.tile-icon { font-size: 18px; line-height: 1; }
+.tile-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+  line-height: 1.15;
+  text-align: center;
+  max-width: 62px;
+  overflow: hidden;
+}
+
+.tile-blue   { background: var(--tile-blue); }
+.tile-green  { background: var(--tile-green); }
+.tile-purple { background: var(--tile-purple); }
+.tile-teal   { background: var(--tile-teal); }
+.tile-orange { background: var(--tile-orange); }
+.tile-magenta { background: var(--tile-magenta); }
+.tile-red { background: var(--tile-red); }
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.theme-select {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.theme-select:hover { background: var(--bg-hover); }
+.theme-select:focus { outline: none; border-color: var(--accent); }
+
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+#clear-filters { margin: 6px 0 10px; }
+#delete-rated-1 {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 10px;
+  white-space: normal;
+  text-align: center;
+}
+
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label { font-size: 12px; color: var(--text-dim); }
+.filter-group select, .filter-group input[type=text], .filter-group input:not([type]) {
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.filter-group select[multiple] { padding: 2px; }
+.filter-group select[multiple] option { padding: 4px 6px; }
+.filter-group input[type=checkbox] { margin-right: 6px; }
+.filter-hint { font-weight: 400; color: var(--text-dim); font-size: 10px; }
+
+.sidebar-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.sidebar-tools .btn-secondary { flex: 1; }
+.playlists-header-btns { display: flex; gap: 6px; }
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btn-secondary, .btn-small, .btn-primary {
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.btn-small { padding: 5px 8px; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #0b0d12; font-weight: 600; }
+.btn-secondary:hover, .btn-small:hover { background: var(--accent-dim); }
+.danger { color: var(--danger); }
+.danger-btn {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: transparent;
+}
+.danger-btn:hover { background: var(--danger); color: #fff; }
+
+.playlists-section { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+.playlists-header { display: flex; align-items: center; justify-content: space-between; }
+.playlists-header h3 { margin: 0; font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+.playlist-list { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 2px; }
+.playlist-list li {
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.playlist-list li:hover { background: var(--bg-hover); }
+.playlist-list .pl-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-list .count { color: var(--text-dim); font-size: 11px; }
+.playlist-list .pl-delete {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+.playlist-list li:hover .pl-delete { opacity: 1; }
+.playlist-list .pl-delete:hover { color: var(--danger); background: var(--bg); }
+
+/* The track row's own fixed-width columns (art, idx, genre, year, rating,
+   the action buttons) plus gaps already total ~510px before title/artist
+   get anything -- a min-width below that starves them down to nothing
+   instead of leaving them illegible-but-present, which is what actually
+   happened when a wider theme stage pushed this container toward its old
+   320px floor. 680px guarantees both a readable amount of room. */
+.main { flex: 1; min-width: 680px; overflow-y: auto; padding: 12px 16px; }
+.body { overflow-x: auto; }
+.hidden { display: none !important; }
+
+.track-list-wrap { display: flex; flex-direction: column; height: 100%; }
+.track-list { flex: 1; }
+
+.track-row {
+  display: grid;
+  grid-template-columns: 20px 36px 28px 1fr 1fr 90px 70px 60px 32px 40px 32px;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.track-row:hover { background: var(--bg-hover); }
+.track-row.playing { background: var(--accent-dim); }
+.track-row.selected { background: var(--accent-dim); outline: 1px solid var(--accent); }
+.track-row .col-check { display: flex; align-items: center; justify-content: center; }
+.track-row .col-check input { cursor: pointer; }
+.track-row .col-art { width: 32px; height: 32px; border-radius: 0; overflow: hidden; background: var(--bg); flex-shrink: 0; }
+.track-row .col-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.track-row .col-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-row .col-artist { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-row .col-genre, .track-row .col-year { color: var(--text-dim); font-size: 12px; }
+.track-row .col-rating { font-size: 12px; white-space: nowrap; }
+.track-row .row-stars { cursor: pointer; }
+.track-row .row-stars span { color: var(--text-dim); opacity: .5; transition: color .1s ease, opacity .1s ease; }
+.track-row .row-stars span.filled { color: var(--star); opacity: 1; }
+.track-row .col-add { text-align: center; color: var(--text-dim); }
+.track-row .col-add:hover { color: var(--accent); }
+.track-row .col-queue { text-align: center; color: var(--text-dim); }
+.track-row .col-queue:hover { color: var(--accent); }
+.track-row .col-queue.col-queue-flash { color: var(--star); }
+.track-row .col-lookup { text-align: center; color: var(--text-dim); font-size: 12px; }
+.track-row .col-lookup:hover { color: var(--accent); }
+.track-row .col-idx { color: var(--text-dim); font-size: 11px; text-align: right; }
+
+.selection-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+.selection-toolbar #selection-count { font-size: 13px; font-weight: 600; margin-right: auto; }
+
+.load-sentinel { display: flex; justify-content: center; align-items: center; padding: 18px 0; color: var(--text-dim); font-size: 12px; min-height: 20px; }
+
+.playlist-view-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.playlist-view-header h2 { margin: 0; font-size: 16px; flex: 1; }
+
+.player-bar {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+}
+
+.now-playing { overflow: hidden; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.np-art { width: 44px; height: 44px; border-radius: 0; object-fit: cover; flex-shrink: 0; background: var(--bg); }
+.np-text { overflow: hidden; min-width: 0; }
+.np-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-sub { color: var(--text-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Wraps onto a second line at narrow widths instead of squeezing every
+   control into one row -- a hard-overflowing single row is what used to
+   force this whole grid wider than the window and made controls overlap. */
+.player-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
+.btn-icon {
+  background: var(--tile-blue);
+  border: none;
+  color: #fff;
+  border-radius: 0;
+  width: 34px; height: 34px;
+  font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.btn-icon:hover { filter: brightness(1.15); }
+.seek { flex: 1; min-width: 60px; max-width: 320px; }
+.time-display { color: var(--text-dim); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.autoplay-toggle { font-size: 11px; color: var(--text-dim); white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+.volume-control { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.volume-control #volume-slider { width: 70px; }
+#shuffle-toggle.active { filter: brightness(1.4); box-shadow: 0 0 0 2px var(--accent) inset; }
+
+.rating-controls { display: flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 0; flex-wrap: wrap; }
+.rating-controls .btn-small {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 28px; box-sizing: border-box; line-height: 1;
+}
+.rate-label { color: var(--text-dim); font-size: 12px; }
+.stars { font-size: 18px; letter-spacing: 2px; cursor: pointer; }
+.stars span { color: var(--text-dim); opacity: .5; transition: color .1s ease, opacity .1s ease; }
+.stars span.filled { color: var(--star); opacity: 1; }
+
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+}
+.modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 20px;
+  width: 360px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.modal h3 { margin: 0 0 14px; font-size: 15px; }
+.modal input[type=text] {
+  width: 100%; padding: 8px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.modal-list-item {
+  display: flex; justify-content: space-between; padding: 8px; border-radius: var(--radius);
+  cursor: pointer;
+}
+.modal-list-item:hover { background: var(--bg-hover); }
+
+.dup-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  width: min(440px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.dup-panel-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.dup-panel-header h3 { margin: 0; font-size: 15px; flex: 1; }
+
+.dup-body { padding: 18px 16px; overflow-y: auto; }
+.about-body p { font-size: 13px; line-height: 1.6; margin: 0 0 14px; }
+.about-copyright { color: var(--text-dim); font-size: 12px; }
+.about-donate-btn {
+  display: inline-block; text-decoration: none; text-align: center;
+  padding: 10px 16px; cursor: pointer;
+}
+
+.help-panel { width: min(560px, 92vw); max-height: 82vh; }
+.help-body p { font-size: 13px; line-height: 1.6; margin: 0 0 12px; }
+.help-body h4 { font-size: 13px; margin: 20px 0 6px; }
+.help-body h4:first-child { margin-top: 0; }
+.help-intro { color: var(--text-dim); font-size: 12px; }
+.help-body code {
+  background: var(--bg-hover); padding: 1px 5px; border-radius: 3px; font-size: 12px;
+}
+.dup-summary-text { margin: 0 0 16px; font-size: 13px; line-height: 1.6; }
+.dup-summary-note { color: var(--text-dim); font-size: 12px; }
+.dup-clean-btn { width: 100%; padding: 10px; font-size: 13px; }
+.dup-toggle-details { margin-top: 10px; }
+.dup-details {
+  margin-top: 12px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+.dup-detail-row {
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+.dup-detail-row:last-child { border-bottom: none; }
+
+.dup-review-panel { width: min(720px, 94vw); }
+.dup-review-load-more { width: 100%; margin-top: 8px; }
+.dup-review-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.dup-review-group.dup-review-resolved { opacity: .5; }
+.dup-review-group-header { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.dup-review-track {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.dup-review-track:last-child { border-bottom: none; }
+.dup-review-track-check { flex-shrink: 0; cursor: pointer; }
+.dup-review-track-info { min-width: 0; overflow: hidden; flex: 1; }
+.dup-review-track-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dup-review-track-meta { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dup-review-delete-btn { flex-shrink: 0; }
+.dup-review-empty { color: var(--text-dim); font-size: 13px; text-align: center; padding: 24px 0; }
+
+.dup-review-bulk-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-hover);
+  flex-shrink: 0;
+}
+.dup-review-bulk-bar #dup-review-selected-count { flex: 1; font-size: 12px; color: var(--text-dim); }
+
+.radio-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  width: min(640px, 94vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+.radio-match-row {
+  display: flex; align-items: center; gap: 10px; padding: 14px 16px 0; flex-shrink: 0;
+}
+.radio-match-msg { font-size: 12px; color: var(--text-dim); }
+.radio-filters {
+  display: flex; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.radio-filters select {
+  flex: 1; min-width: 0; padding: 7px 8px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 12px;
+}
+.radio-body { padding: 8px 16px 16px; overflow-y: auto; }
+.radio-station-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.radio-station-row:last-child { border-bottom: none; }
+.radio-station-favicon {
+  width: 32px; height: 32px; border-radius: var(--radius); object-fit: cover;
+  background: var(--bg-hover); flex-shrink: 0;
+}
+.radio-station-favicon-fallback {
+  width: 32px; height: 32px; border-radius: var(--radius); background: var(--bg-hover);
+  display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0;
+}
+.radio-station-info { min-width: 0; flex: 1; }
+.radio-station-name {
+  font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.radio-station-meta {
+  font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.radio-station-play { flex-shrink: 0; }
+.radio-station-row.playing .radio-station-name { color: var(--accent); }
+
+.tags-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  width: min(560px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+.tags-body { padding: 18px 16px; overflow-y: auto; }
+.tags-checklist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; font-size: 13px; }
+.tags-checklist label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+.tags-results { margin-top: 16px; }
+.tags-empty { color: var(--text-dim); font-size: 13px; text-align: center; padding: 24px 0; }
+
+.tags-deep-divider { border-top: 1px solid var(--border); margin: 22px 0 16px; }
+.tags-deep-header strong { font-size: 13px; }
+.tags-deep-note { color: var(--text-dim); font-size: 12px; line-height: 1.5; margin: 4px 0 14px; }
+
+.tag-issue-section { margin-bottom: 18px; }
+.tag-issue-header {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; font-weight: 700; margin-bottom: 8px;
+}
+.tag-issue-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.tag-issue-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.tag-issue-row:last-child { border-bottom: none; }
+.tag-issue-info { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-issue-input {
+  width: 130px;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+.tag-issue-row.tag-issue-done { opacity: .5; }
+.tag-issue-row.tag-issue-done .tag-issue-info { text-decoration: line-through; }
+
+.lyrics-text {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ----------------------------------------- 0. DEFAULT (Platinum Utility) -- */
+/* Late-90s Mac OS Platinum: flat light-gray chrome, simple beveled buttons
+   (bright top-left / dark bottom-right edge, no gloss), hairline borders,
+   a plain navy selection tint -- minimal and utilitarian, not skeuomorphic. */
+body[data-theme="default"] {
+  --bg: #ffffff; --bg-elevated: #dedede; --bg-hover: #c8c8c8;
+  --border: #888888; --text: #111111; --text-dim: #5a5a5a;
+  --accent: #2955a3; --accent-dim: #c9dbf5; --star: #333333;
+  --danger: #cc0000; --radius: 3px;
+  font-family: "Lucida Grande", "Geneva", Tahoma, Verdana, sans-serif;
+}
+
+body[data-theme="default"] .tile,
+body[data-theme="default"] .tile-blue,
+body[data-theme="default"] .tile-green,
+body[data-theme="default"] .tile-purple,
+body[data-theme="default"] .tile-teal,
+body[data-theme="default"] .tile-orange,
+body[data-theme="default"] .tile-magenta,
+body[data-theme="default"] .tile-red {
+  background: linear-gradient(180deg, #f5f5f5, #cfcfcf);
+  border: 1px solid #7a7a7a;
+  border-radius: 3px;
+  color: #111;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.85), inset -1px -1px 0 rgba(0,0,0,.3);
+}
+body[data-theme="default"] .tile-icon { filter: grayscale(.4) contrast(1.1); }
+body[data-theme="default"] .tile:hover { filter: brightness(1.04); }
+body[data-theme="default"] .tile:active {
+  transform: none;
+  background: linear-gradient(180deg, #cfcfcf, #f5f5f5);
+  box-shadow: inset -1px -1px 0 rgba(255,255,255,.85), inset 1px 1px 0 rgba(0,0,0,.3);
+}
+
+body[data-theme="default"] .btn-icon {
+  background: linear-gradient(180deg, #f5f5f5, #cfcfcf);
+  border: 1px solid #7a7a7a;
+  border-radius: 3px;
+  color: #111;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.85), inset -1px -1px 0 rgba(0,0,0,.3);
+}
+body[data-theme="default"] .btn-icon:hover { filter: brightness(1.04); }
+body[data-theme="default"] .btn-icon:active {
+  box-shadow: inset -1px -1px 0 rgba(255,255,255,.85), inset 1px 1px 0 rgba(0,0,0,.3);
+}
+
+body[data-theme="default"] .btn-secondary,
+body[data-theme="default"] .btn-small {
+  background: linear-gradient(180deg, #f5f5f5, #cfcfcf);
+  border: 1px solid #7a7a7a;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.85), inset -1px -1px 0 rgba(0,0,0,.3);
+}
+body[data-theme="default"] .btn-secondary:hover,
+body[data-theme="default"] .btn-small:hover {
+  background: linear-gradient(180deg, #e8e8e8, #c0c0c0);
+}
+body[data-theme="default"] .btn-primary {
+  background: linear-gradient(180deg, #6e8fd6, #2c4f9e);
+  border: 1px solid #1b3266;
+  color: #fff;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.4), inset -1px -1px 0 rgba(0,0,0,.3);
+}
+
+body[data-theme="default"] .seek {
+  -webkit-appearance: none;
+  height: 6px;
+  background: linear-gradient(180deg, #b0b0b0, #e6e6e6);
+  border: 1px solid #7a7a7a;
+  border-radius: 3px;
+}
+body[data-theme="default"] .seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  margin-top: -5px;
+  background: linear-gradient(180deg, #f5f5f5, #c8c8c8);
+  border: 1px solid #6a6a6a;
+  border-radius: 2px;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.8);
+}
+
+body[data-theme="default"] .modal { box-shadow: 2px 2px 8px rgba(0,0,0,.35); }
+
+/* -------------------------------------------------------- 0b. GRAPHITE -- */
+/* The dark counterpart to Platinum -- Mac OS 9 shipped a grayscale
+   "Graphite" appearance alongside the default blue Platinum one. Same flat
+   beveled-button language, just inverted for a dark charcoal surface. */
+body[data-theme="graphite"] {
+  --bg: #2b2b2b; --bg-elevated: #1e1e1e; --bg-hover: #3c3c3c;
+  --border: #5c5c5c; --text: #e8e8e8; --text-dim: #9a9a9a;
+  --accent: #6e9ae8; --accent-dim: #2c4568; --star: #cccccc;
+  --danger: #ff6b5e; --radius: 3px;
+  font-family: "Lucida Grande", "Geneva", Tahoma, Verdana, sans-serif;
+}
+
+body[data-theme="graphite"] .tile,
+body[data-theme="graphite"] .tile-blue,
+body[data-theme="graphite"] .tile-green,
+body[data-theme="graphite"] .tile-purple,
+body[data-theme="graphite"] .tile-teal,
+body[data-theme="graphite"] .tile-orange,
+body[data-theme="graphite"] .tile-magenta,
+body[data-theme="graphite"] .tile-red {
+  background: linear-gradient(180deg, #4c4c4c, #2e2e2e);
+  border: 1px solid #5c5c5c;
+  border-radius: 3px;
+  color: #e8e8e8;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.18), inset -1px -1px 0 rgba(0,0,0,.6);
+}
+body[data-theme="graphite"] .tile-icon { filter: grayscale(.4) contrast(1.1) brightness(1.15); }
+body[data-theme="graphite"] .tile:hover { filter: brightness(1.15); }
+body[data-theme="graphite"] .tile:active {
+  transform: none;
+  background: linear-gradient(180deg, #2e2e2e, #4c4c4c);
+  box-shadow: inset -1px -1px 0 rgba(255,255,255,.18), inset 1px 1px 0 rgba(0,0,0,.6);
+}
+
+body[data-theme="graphite"] .btn-icon {
+  background: linear-gradient(180deg, #4c4c4c, #2e2e2e);
+  border: 1px solid #5c5c5c;
+  border-radius: 3px;
+  color: #e8e8e8;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.18), inset -1px -1px 0 rgba(0,0,0,.6);
+}
+body[data-theme="graphite"] .btn-icon:hover { filter: brightness(1.15); }
+body[data-theme="graphite"] .btn-icon:active {
+  box-shadow: inset -1px -1px 0 rgba(255,255,255,.18), inset 1px 1px 0 rgba(0,0,0,.6);
+}
+
+body[data-theme="graphite"] .btn-secondary,
+body[data-theme="graphite"] .btn-small {
+  background: linear-gradient(180deg, #4c4c4c, #2e2e2e);
+  border: 1px solid #5c5c5c;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.18), inset -1px -1px 0 rgba(0,0,0,.6);
+}
+body[data-theme="graphite"] .btn-secondary:hover,
+body[data-theme="graphite"] .btn-small:hover {
+  background: linear-gradient(180deg, #5c5c5c, #3a3a3a);
+}
+body[data-theme="graphite"] .btn-primary {
+  background: linear-gradient(180deg, #6e96e0, #2f5bb0);
+  border: 1px solid #16264a;
+  color: #fff;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.25), inset -1px -1px 0 rgba(0,0,0,.4);
+}
+
+body[data-theme="graphite"] .seek {
+  -webkit-appearance: none;
+  height: 6px;
+  background: linear-gradient(180deg, #1a1a1a, #333333);
+  border: 1px solid #5c5c5c;
+  border-radius: 3px;
+}
+body[data-theme="graphite"] .seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  margin-top: -5px;
+  background: linear-gradient(180deg, #5c5c5c, #333333);
+  border: 1px solid #1a1a1a;
+  border-radius: 2px;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.25);
+}
+
+body[data-theme="graphite"] .modal { box-shadow: 2px 2px 10px rgba(0,0,0,.6); }
+
+/* ================================================== PLAYER THEME STAGES == */
+.theme-stage {
+  position: relative;
+  width: 286px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-left: 1.1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.stage-panel { width: 100%; height: 100%; }
+
+.stage-toolbtn { width: 30px; height: 30px; font-size: 14px; }
+.stage-toolbtn.active { filter: brightness(1.4); box-shadow: 0 0 0 2px var(--accent) inset; }
+
+.stage-exit-btn {
+  position: absolute;
+  top: 10px; right: 10px;
+  z-index: 5;
+  width: 26px; height: 26px;
+  border: none; border-radius: 50%;
+  background: rgba(0,0,0,.45);
+  color: #fff;
+  font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  opacity: .45;
+  transition: opacity .15s ease;
+}
+.stage-exit-btn:hover { opacity: 1; }
+
+/* -------------------------------------------------------- Focus mode ---- */
+/* Hides everything but the themed player itself, so the retro skin is the
+   only thing on screen -- every theme has its own play/pause/prev/next (and
+   a seek bar) built into its panel, so the shared transport footer is
+   redundant here. It also has a fixed-width grid that doesn't fit a small
+   focus-mode window (see desktop_macos.py's enter_focus), so leaving it
+   visible would just clip. */
+.app.focus-mode .topbar,
+.app.focus-mode .sidebar,
+.app.focus-mode .main,
+.app.focus-mode .player-bar {
+  display: none;
+}
+.app.focus-mode .theme-stage {
+  width: 100%;
+  border-left: none;
+}
+
+/* -------------------------------------------------- Fill-the-space scaling
+   In both focus mode and the popped-out floating window, the stage panel
+   gets far more room than its hand-tuned sidebar width. Letting the panel's
+   own intrinsic-size box sit centered (instead of forced to 100% height)
+   makes it measurable, and app.js scales that box up/down with a JS-computed
+   transform to fill the available space uniformly, artwork and all, instead
+   of leaving it pinned small in a sea of background. */
+.app.focus-mode .stage-panel,
+body.popout-body .stage-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.app.focus-mode #stage-hifi .hifi-panel,
+.app.focus-mode #stage-cassette .cassette-shell,
+.app.focus-mode #stage-vinyl .turntable,
+body.popout-body #stage-hifi .hifi-panel,
+body.popout-body #stage-cassette .cassette-shell,
+body.popout-body #stage-vinyl .turntable {
+  min-height: 0;
+  flex-shrink: 0;
+  transform-origin: center center;
+}
+/* .turntable-plate's flex:1 has nothing to grow into once .turntable's
+   min-height:0 above makes the container auto-height -- it settles to its
+   content size (the disc + its padding) same as the other two panels, so
+   scaling the whole .turntable (disc, tonearm, nameplate, and seek bar
+   together) as one rigid unit keeps the tonearm correctly aligned to the
+   disc and the seek bar correctly placed below it, at any scale. */
+
+/* --------------------------------------------- Popped-out floating player -
+   Applied inside the separate Document Picture-in-Picture window, not the
+   main page -- stacks the stage panel above the transport footer and lets
+   the stage panel fill whatever width the floating window is resized to. */
+body.popout-body { height: 100%; }
+body.popout-body .popout-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+body.popout-body .theme-stage {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  border-left: none;
+}
+body.popout-body .player-bar {
+  flex-shrink: 0;
+  grid-template-columns: 1fr;
+  grid-auto-rows: auto;
+  gap: 8px;
+}
+body.popout-body .rating-controls { justify-content: flex-start; flex-wrap: wrap; }
+body.popout-body .player-controls { flex-wrap: wrap; }
+
+/* -------------------------------------------------------------- 1. HI-FI -- */
+/* Pioneer SD-1100 era: brushed aluminium, warm amber backlit VU meters,
+   clean geometric sans -- not the typewriter/LED look of a modern rig. */
+body[data-theme="hifi"] {
+  --bg: #171613; --bg-elevated: #201e19; --bg-hover: #2b2822;
+  --border: #3d3a32; --text: #efe9dd; --text-dim: #a89e8c;
+  --font-hifi: "Futura", "Century Gothic", "Avenir Next", Avenir, "Helvetica Neue", Arial, sans-serif;
+  /* Amber (design default) VU meter backlight -- picked via the VU color
+     select next to Theme (see #vu-color-select in app.js), same
+     theme-scoped-choice pattern as the vinyl wood finish and cassette
+     design pickers. --accent/--accent-dim/--star drive every button,
+     highlight and glow across the whole theme (not just the meter itself),
+     so switching this one color repaints buttons, the seek bar, the VFD
+     display glow, and the playing-track highlight all together --
+     --accent-rgb exists only so those glows can use rgba(var(--accent-rgb),
+     alpha) instead of hand-picking a separate rgba() per color. */
+  --accent: #e8961f; --accent-dim: #4a3413; --star: #e8961f;
+  --accent-bright: #ffc24d; --accent-rgb: 232,150,31;
+  --vu-face-grad: linear-gradient(180deg, #efe9dd 0 20%, #e8c88a 55%, #e0a24a 78%, #c67a2a 100%);
+  --vu-glow: rgba(230,140,30,.35);
+}
+body[data-theme="hifi"][data-vu-color="blue"] {
+  --accent: #3fa9e8; --accent-dim: #1a3f5c; --star: #3fa9e8;
+  --accent-bright: #7fc8f5; --accent-rgb: 63,169,232;
+  --vu-face-grad: linear-gradient(180deg, #e9f0f4 0 20%, #a8cfe0 55%, #5fa8d0 78%, #2f74a8 100%);
+  --vu-glow: rgba(60,140,220,.35);
+}
+body[data-theme="hifi"][data-vu-color="green"] {
+  --accent: #3ecf6e; --accent-dim: #1a5c34; --star: #3ecf6e;
+  --accent-bright: #7fe89f; --accent-rgb: 62,207,110;
+  --vu-face-grad: linear-gradient(180deg, #e9f4ea 0 20%, #a8e0b8 55%, #5fd08a 78%, #2fa860 100%);
+  --vu-glow: rgba(60,200,110,.35);
+}
+#stage-hifi .hifi-panel {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 13px;
+  padding: 16px 15.4px;
+  min-height: 100%;
+  background:
+    repeating-linear-gradient(98deg, rgba(255,255,255,.14) 0px, rgba(255,255,255,.14) .66px, transparent .66px, transparent 2.31px),
+    repeating-linear-gradient(101deg, rgba(0,0,0,.07) 0px, rgba(0,0,0,.07) .55px, transparent .55px, transparent 3.63px),
+    linear-gradient(115deg, rgba(255,255,255,.3) 0%, transparent 25%, transparent 65%, rgba(255,255,255,.18) 100%),
+    linear-gradient(180deg, #d8d8d8, #a8a8a8 45%, #8c8c8c 55%, #c4c4c4);
+  border-left: 1.1px solid #eee;
+  box-shadow: -1.1px 0 0 #555 inset;
+}
+#stage-hifi .hifi-art-frame {
+  width: 190px; height: 190px;
+  border-radius: 2.2px;
+  background: radial-gradient(ellipse at 50% 15%, #241a10, #050301 85%);
+  border: 5.5px solid #f2ede2;
+  box-shadow:
+    0 0 0 1.1px #6b6558,
+    0 0 0 3.3px #2a2822,
+    inset 0 2.2px 6.6px rgba(0,0,0,.8),
+    0 2.2px 6.6px rgba(0,0,0,.5);
+  overflow: hidden;
+}
+#stage-hifi .hifi-art { width: 100%; height: 100%; object-fit: cover; display: block; }
+#stage-hifi .hifi-art.hidden { display: none; }
+#stage-hifi .vfd-display {
+  width: 242px;
+  padding: 9.9px 11px;
+  background: radial-gradient(ellipse at 50% 15%, #1c1206, #050301 85%);
+  border: 3.3px solid #2a2822;
+  border-radius: 2.2px;
+  box-shadow: inset 0 2.2px 6.6px rgba(0,0,0,.8), 0 1.1px 0 rgba(255,255,255,.15);
+}
+#stage-hifi .vfd-line {
+  font-family: "Courier New", monospace;
+  font-weight: 700;
+  font-size: 14.3px;
+  letter-spacing: 1.1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-align: center;
+  color: var(--accent-bright);
+  text-shadow: 0 0 3.3px rgba(var(--accent-rgb),.9), 0 0 8.8px rgba(var(--accent-rgb),.55);
+  height: 19.8px;
+  line-height: 19.8px;
+}
+#stage-hifi .vfd-line + .vfd-line { margin-top: 3.3px; }
+#stage-hifi .vfd-line-inner { display: inline-block; white-space: nowrap; }
+#stage-hifi .vfd-line.scrolling {
+  text-align: left;
+  /* fade the edges so the text doesn't look like it's cutting off mid-run */
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+#stage-hifi .vfd-line.scrolling .vfd-line-inner {
+  animation: vfd-marquee var(--vfd-duration, 6s) ease-in-out infinite;
+}
+@keyframes vfd-marquee {
+  0%, 8%   { transform: translateX(0); }
+  46%, 54% { transform: translateX(var(--vfd-scroll-dist, 0)); }
+  92%, 100% { transform: translateX(0); }
+}
+#stage-hifi .vfd-char {
+  display: inline-block;
+  min-width: .68em;
+  text-align: center;
+  border-right: 1.1px solid rgba(var(--accent-rgb),.07);
+}
+#stage-hifi .vu-rect-row { display: flex; flex-direction: column; gap: 10px; }
+#stage-hifi .vu-rect { display: flex; flex-direction: column; align-items: center; }
+#stage-hifi .vu-rect-face {
+  position: relative;
+  width: 242px; height: 121px;
+  overflow: hidden;
+  border-radius: 2.2px;
+  background: var(--vu-face-grad);
+  border: 5.5px solid #f2ede2;
+  box-shadow:
+    0 0 0 1.1px #6b6558,
+    0 0 0 3.3px #2a2822,
+    inset 0 3.3px 6.6px rgba(0,0,0,.35),
+    inset 0 -11px 22px var(--vu-glow),
+    0 2.2px 6.6px rgba(0,0,0,.5);
+}
+#stage-hifi .vu-scale-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+#stage-hifi .vu-needle-rect {
+  position: absolute; left: 56%; bottom: -18%; width: 1.76px; height: 115%;
+  background: linear-gradient(#0a0602, #000);
+  transform-origin: bottom center;
+  transform: rotate(-60deg);
+  transition: transform .09s ease-out;
+}
+#stage-hifi .vu-channel-tag {
+  position: absolute; top: 8px; left: 11px;
+  font-family: var(--font-hifi); font-size: 9px; font-weight: 700;
+  color: #3a2a10; letter-spacing: .1em;
+  opacity: .55;
+}
+#stage-hifi .hifi-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 242px; height: 6.6px;
+  margin: 0;
+  border-radius: 3.3px;
+  background:
+    linear-gradient(90deg, var(--accent-bright) var(--fill, 0%), transparent var(--fill, 0%)),
+    #6e6e6e;
+  box-shadow:
+    inset 0 2.2px 3.3px rgba(0,0,0,.55),
+    inset 0 -1.1px 0 rgba(255,255,255,.35),
+    0 1.1px 0 rgba(255,255,255,.25);
+  cursor: pointer;
+}
+#stage-hifi .hifi-progress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13.2px; height: 13.2px;
+  margin-top: -3.3px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #d6d6d6, #8c8c8c 65%, #999);
+  border: 1.1px solid #6b6b6b;
+  box-shadow: 0 1.1px 2.2px rgba(0,0,0,.5), 0 0 4.4px rgba(var(--accent-rgb),.6);
+}
+#stage-hifi .hifi-progress::-moz-range-track {
+  height: 6.6px; border-radius: 3.3px;
+  background: #6e6e6e;
+  box-shadow: inset 0 2.2px 3.3px rgba(0,0,0,.55);
+}
+#stage-hifi .hifi-progress::-moz-range-progress {
+  height: 6.6px; border-radius: 3.3px 0 0 3.3px;
+  background: linear-gradient(90deg, var(--accent-bright), var(--accent));
+}
+#stage-hifi .hifi-progress::-moz-range-thumb {
+  width: 13.2px; height: 13.2px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #d6d6d6, #8c8c8c 65%, #999);
+  border: 1.1px solid #6b6b6b;
+  box-shadow: 0 1.1px 2.2px rgba(0,0,0,.5), 0 0 4.4px rgba(var(--accent-rgb),.6);
+}
+#stage-hifi .hifi-transport {
+  display: flex; align-items: center; justify-content: center; gap: 17.6px;
+}
+#stage-hifi .hifi-btn {
+  width: 41.8px; height: 41.8px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14.3px; line-height: 1; color: #55524a;
+  background: radial-gradient(circle at 50% 42%, #b0b0b0, #8c8c8c 60%, #999 100%);
+  border: 1.1px solid #6b6b6b;
+  box-shadow:
+    inset 0 2.2px 3.3px rgba(0,0,0,.45),
+    inset 0 -1.1px 1.1px rgba(255,255,255,.4),
+    0 1.1px 0 rgba(255,255,255,.3);
+  cursor: pointer;
+  transition: color .15s ease, text-shadow .15s ease;
+}
+#stage-hifi .hifi-btn-play {
+  width: 50.6px; height: 50.6px;
+  font-size: 16.5px;
+  color: #3a2a10;
+}
+#stage-hifi .hifi-btn:hover {
+  filter: brightness(1.06);
+  color: var(--accent);
+  text-shadow: 0 0 5px rgba(var(--accent-rgb),.9), 0 0 11px rgba(var(--accent-rgb),.6);
+}
+#stage-hifi .hifi-btn:active {
+  box-shadow:
+    inset 0 3.3px 5.5px rgba(0,0,0,.6),
+    inset 0 -1.1px 1.1px rgba(255,255,255,.25);
+  transform: translateY(1.1px);
+}
+
+/* ------------------------------------------------------------ 2. CASSETTE -- */
+body[data-theme="cassette"] {
+  /* Molded-grey deck plastic, not cardboard/cardboard-brown -- and the cool
+     green of a period peak-level LED instead of an amber glow. */
+  --bg: #1e1e1e; --bg-elevated: #262626; --bg-hover: #303030;
+  --border: #3a3a3a; --text: #d6d2c4; --text-dim: #8f8b82;
+  --accent: #3ecf6e; --accent-dim: #1a5c34; --star: #3ecf6e;
+}
+/* Cassette shells are landscape -- give the sidebar extra width so the tape
+   isn't squeezed into the narrower portrait column the other themes use. */
+body[data-theme="cassette"] .theme-stage { width: 470px; }
+#stage-cassette .cassette-shell {
+  position: relative;
+  padding: 19px 24px;
+  min-height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 17px;
+  background: linear-gradient(180deg, #262626, #141414);
+  border-left: 1.1px solid #3a3a3a;
+  box-shadow: -2.2px 0 0 #0a0a0a inset;
+}
+#stage-cassette .cassette-art-frame {
+  width: 207px; height: 207px;
+  border-radius: 4px;
+  background: linear-gradient(160deg, #2e2e2e, #161616);
+  border: 4px solid #4a4a4a;
+  box-shadow:
+    0 0 0 1px #0a0a0a,
+    inset 0 2px 6px rgba(0,0,0,.6),
+    0 4px 10px rgba(0,0,0,.5);
+  overflow: hidden;
+}
+#stage-cassette .cassette-art { width: 100%; height: 100%; object-fit: cover; display: block; }
+#stage-cassette .cassette-art.hidden { display: none; }
+#stage-cassette .cassette-visual { position: relative; width: 414px; }
+#stage-cassette .cassette-svg {
+  display: block; width: 100%; height: auto;
+  filter: drop-shadow(0 8px 16px rgba(0,0,0,.5));
+}
+#stage-cassette .cas-shell { fill: url(#casShellGrad); }
+#stage-cassette .cas-label-bg, #stage-cassette .cas-info-bg { fill: #f2e8d0; }
+#stage-cassette .cas-ruled-line { stroke: #b0a180; stroke-width: 1.2; }
+
+/* "Sky Blue Ribbon" (design A) is the default look -- picked via the
+   Cassette design select next to Theme, same pattern as the vinyl wood
+   finish picker. Only the shell/label/band layer below varies by design;
+   the window, reels and tape-ring (the animated playback state) are
+   identical across every one of them. */
+#stage-cassette .cas-color-band { fill: #a9d4de; }
+#stage-cassette .cas-window { fill: url(#casWindowGrad); }
+
+body[data-cassette-design="red"] #stage-cassette .cas-color-band { fill: #b5482f; }
+body[data-cassette-design="red"] #stage-cassette .cas-ruled-line { stroke: #c96a4a; }
+
+body[data-cassette-design="rust"] #stage-cassette .cas-shell { fill: url(#casShellGrad-rust); }
+body[data-cassette-design="rust"] #stage-cassette .cas-color-band { fill: #9c4a34; }
+body[data-cassette-design="rust"] #stage-cassette .cas-label-bg,
+body[data-cassette-design="rust"] #stage-cassette .cas-info-bg { fill: #f2ede0; }
+body[data-cassette-design="rust"] #stage-cassette .cas-ruled-line { stroke: #a86a4a; }
+
+/* Each reel is a white sprocket hub (a handful of drive tabs around a disc)
+   with the wound tape shown as a brown ring whose radius tracks how much
+   tape is actually on that reel -- full on the supply side at the start,
+   growing on the take-up side as the track plays. */
+#stage-cassette .cas-hub-base { fill: #f2f1ea; }
+#stage-cassette .cas-hub-tab { fill: #aaa9a2; }
+/* Wound tape sits OUTSIDE the hub, as a ring whose thickness grows or
+   shrinks -- drawn as a stroked (unfilled) circle so the hub and its
+   sprocket tabs, drawn on top, are never covered by it. */
+#stage-cassette .cas-tape-ring {
+  fill: none; stroke: #2b1a10;
+  transition: r .25s linear, stroke-width .25s linear;
+}
+#stage-cassette .cas-hub-cap { fill: #6b6a63; }
+
+#stage-cassette .cas-side-label {
+  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-size: 13px; font-weight: 700; letter-spacing: .06em; fill: #1c1a16;
+}
+#stage-cassette .cas-side-box { fill: none; stroke: #1c1a16; stroke-width: 1.3; }
+#stage-cassette .cas-min-text {
+  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-size: 6.5px; font-weight: 700; letter-spacing: .01em; fill: #1c1a16;
+}
+#stage-cassette .cas-min-solid {
+  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-size: 24px; font-weight: 800; fill: #1c1a16;
+}
+#stage-cassette .cas-min-suffix {
+  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-size: 11px; font-weight: 700; fill: #1c1a16;
+}
+
+#stage-cassette .cas-hole, #stage-cassette .cas-hole-slot { fill: #4a4a4a; }
+#stage-cassette .cas-screw line { stroke: #3a3a3a; stroke-width: 1.6; }
+#stage-cassette .cassette-handwriting {
+  position: absolute;
+  left: 12%; width: 76%;
+  text-align: center;
+  font-family: "Bradley Hand", "Noteworthy", "Segoe Print", "Comic Sans MS", cursive;
+  font-weight: 800;
+  -webkit-text-stroke: 0.5px #1c3a6b;
+  color: #1c3a6b;
+  white-space: nowrap; overflow: hidden;
+  pointer-events: none;
+}
+#stage-cassette .scroll-line-inner { display: inline-block; white-space: nowrap; }
+#stage-cassette .cassette-handwriting.scrolling {
+  text-align: left;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+#stage-cassette .cassette-handwriting.scrolling .scroll-line-inner {
+  animation: vfd-marquee var(--vfd-duration, 6s) ease-in-out infinite;
+}
+#stage-cassette .cassette-hw-artist { top: 10%; font-size: 20px; }
+#stage-cassette .cassette-hw-title { top: 17%; font-size: 22px; }
+
+#stage-cassette .cassette-visualizer {
+  display: flex; align-items: flex-end; justify-content: center; gap: 4px;
+  width: 414px; height: 85px;
+  padding: 6px 10px;
+  background: linear-gradient(180deg, #1c1108, #120b05);
+  border: 1px solid #000;
+  border-radius: 3px;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.05);
+}
+/* Classic LED bargraph coloring (LM3916-style: ~5 green / 2 yellow / 3 red
+   segments out of 10) -- the color band is pinned to the FULL meter height
+   and anchored to the bottom, not stretched to each bar's own height, so a
+   short bar only ever shows green and a tall one climbs into yellow/red at
+   the same absolute levels every other bar does. */
+#stage-cassette .cas-vis-bar {
+  flex: 1;
+  min-width: 5px;
+  height: 6%;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(0,0,0,.55) 0 2px, transparent 2px 5px),
+    linear-gradient(0deg,
+      #3ecf6e 0%, #3ecf6e 50%,
+      #f0c419 50%, #f0c419 70%,
+      #e0392b 70%, #e0392b 100%);
+  background-size: auto, 100% 73px;
+  background-position: 0 0, bottom;
+  background-repeat: repeat, no-repeat;
+  border-radius: 1px;
+}
+
+#stage-cassette .cassette-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 414px; height: 6px;
+  margin: 0;
+  border-radius: 3px;
+  background:
+    linear-gradient(90deg, #3ecf6e var(--fill, 0%), transparent var(--fill, 0%)),
+    #2a2a2a;
+  box-shadow:
+    inset 0 2px 3px rgba(0,0,0,.6),
+    inset 0 -1px 0 rgba(255,255,255,.06),
+    0 1px 0 rgba(255,255,255,.05);
+  cursor: pointer;
+}
+#stage-cassette .cassette-progress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px; height: 13px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #6a6a6a, #333 65%, #222);
+  border: 1px solid #0a0a0a;
+  box-shadow: 0 1px 2px rgba(0,0,0,.6), 0 0 4px rgba(62,207,110,.6);
+}
+#stage-cassette .cassette-progress::-moz-range-track {
+  height: 6px; border-radius: 3px;
+  background: #2a2a2a;
+  box-shadow: inset 0 2px 3px rgba(0,0,0,.6);
+}
+#stage-cassette .cassette-progress::-moz-range-progress {
+  height: 6px; border-radius: 3px 0 0 3px;
+  background: linear-gradient(90deg, #7fe89f, #3ecf6e);
+}
+#stage-cassette .cassette-progress::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #6a6a6a, #333 65%, #222);
+  border: 1px solid #0a0a0a;
+  box-shadow: 0 1px 2px rgba(0,0,0,.6), 0 0 4px rgba(62,207,110,.6);
+}
+
+#stage-cassette .cassette-transport {
+  display: flex; gap: 10px; justify-content: center;
+}
+#stage-cassette .cassette-switch {
+  width: 65px; height: 41px;
+  border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; color: #c9c0b0;
+  background: linear-gradient(180deg, #4c4c4c, #2a2a2a 55%, #1c1c1c);
+  border: 1px solid #0a0a0a;
+  box-shadow: 0 3px 0 #000, inset 0 1px 0 rgba(255,255,255,.15);
+  cursor: pointer;
+  transition: color .15s ease;
+}
+#stage-cassette .cassette-switch-play { width: 77px; font-size: 15px; }
+#stage-cassette .cassette-switch:hover { color: var(--accent); }
+#stage-cassette .cassette-switch:active {
+  transform: translateY(3px);
+  box-shadow: 0 0 0 #000, inset 0 2px 5px rgba(0,0,0,.6);
+}
+
+/* --------------------------------------------------------------- 3. VINYL -- */
+body[data-theme="vinyl"] {
+  --bg: #14100f; --bg-elevated: #1c1613; --bg-hover: #261e19;
+  --border: #3a2f22; --text: #ede2c8; --text-dim: #a8946b;
+  --accent: #c9a227; --accent-dim: #6b5714; --star: #c9a227;
+  /* Three real (feTurbulence-generated) wood-grain finishes for the
+     turntable housing -- procedural, not a photo, so no asset file and no
+     network request, but it renders like an actual close-up wood photo
+     rather than a repeating line pattern. Swap --wood-grain to try one. */
+  --wood-grain-walnut: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4MDAnIGhlaWdodD0nNTAwJyB2aWV3Qm94PScwIDAgODAwIDUwMCc+CiAgPGZpbHRlciBpZD0ndycgeD0nMCcgeT0nMCcgd2lkdGg9JzEwMCUnIGhlaWdodD0nMTAwJScgY29sb3ItaW50ZXJwb2xhdGlvbi1maWx0ZXJzPSdzUkdCJz4KICAgIDxmZVR1cmJ1bGVuY2UgdHlwZT0nZnJhY3RhbE5vaXNlJyBiYXNlRnJlcXVlbmN5PScxLjEgMC4wMTInIG51bU9jdGF2ZXM9JzQnIHNlZWQ9JzcnIHN0aXRjaFRpbGVzPSdzdGl0Y2gnIHJlc3VsdD0nbicvPgogICAgPGZlQ29sb3JNYXRyaXggaW49J24nIHR5cGU9J21hdHJpeCcgdmFsdWVzPScwIDAgMCAwIDAgIDAgMCAwIDAgMCAgMCAwIDAgMCAwICAwLjQgMC40IDAuNCAwIDAnIHJlc3VsdD0nYScvPgogICAgPGZlQ29tcG9uZW50VHJhbnNmZXIgaW49J2EnIHJlc3VsdD0nYTInPgogICAgICA8ZmVGdW5jQSB0eXBlPSdnYW1tYScgYW1wbGl0dWRlPScxJyBleHBvbmVudD0nMi42JyBvZmZzZXQ9JzAnLz4KICAgIDwvZmVDb21wb25lbnRUcmFuc2Zlcj4KICAgIDxmZUZsb29kIGZsb29kLWNvbG9yPScjM2EyYTFjJyByZXN1bHQ9J2Jhc2UnLz4KICAgIDxmZUZsb29kIGZsb29kLWNvbG9yPScjMTkxMTBhJyByZXN1bHQ9J2dyYWluQ29sb3InLz4KICAgIDxmZUNvbXBvc2l0ZSBpbj0nZ3JhaW5Db2xvcicgaW4yPSdhMicgb3BlcmF0b3I9J2luJyByZXN1bHQ9J2dyYWluJy8+CiAgICA8ZmVNZXJnZT4KICAgICAgPGZlTWVyZ2VOb2RlIGluPSdiYXNlJy8+CiAgICAgIDxmZU1lcmdlTm9kZSBpbj0nZ3JhaW4nLz4KICAgIDwvZmVNZXJnZT4KICA8L2ZpbHRlcj4KICA8cmVjdCB3aWR0aD0nMTAwJScgaGVpZ2h0PScxMDAlJyBmaWx0ZXI9J3VybCgjdyknLz4KPC9zdmc+");
+  --wood-grain-ebony: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4MDAnIGhlaWdodD0nNTAwJyB2aWV3Qm94PScwIDAgODAwIDUwMCc+CiAgPGZpbHRlciBpZD0ndycgeD0nMCcgeT0nMCcgd2lkdGg9JzEwMCUnIGhlaWdodD0nMTAwJScgY29sb3ItaW50ZXJwb2xhdGlvbi1maWx0ZXJzPSdzUkdCJz4KICAgIDxmZVR1cmJ1bGVuY2UgdHlwZT0nZnJhY3RhbE5vaXNlJyBiYXNlRnJlcXVlbmN5PScwLjk1IDAuMDEnIG51bU9jdGF2ZXM9JzMnIHNlZWQ9JzIxJyBzdGl0Y2hUaWxlcz0nc3RpdGNoJyByZXN1bHQ9J24nLz4KICAgIDxmZUNvbG9yTWF0cml4IGluPSduJyB0eXBlPSdtYXRyaXgnIHZhbHVlcz0nMCAwIDAgMCAwICAwIDAgMCAwIDAgIDAgMCAwIDAgMCAgMC40IDAuNCAwLjQgMCAwJyByZXN1bHQ9J2EnLz4KICAgIDxmZUNvbXBvbmVudFRyYW5zZmVyIGluPSdhJyByZXN1bHQ9J2EyJz4KICAgICAgPGZlRnVuY0EgdHlwZT0nZ2FtbWEnIGFtcGxpdHVkZT0nMScgZXhwb25lbnQ9JzMuNCcgb2Zmc2V0PScwJy8+CiAgICA8L2ZlQ29tcG9uZW50VHJhbnNmZXI+CiAgICA8ZmVGbG9vZCBmbG9vZC1jb2xvcj0nIzI0MWMxNScgcmVzdWx0PSdiYXNlJy8+CiAgICA8ZmVGbG9vZCBmbG9vZC1jb2xvcj0nIzBlMDkwNicgcmVzdWx0PSdncmFpbkNvbG9yJy8+CiAgICA8ZmVDb21wb3NpdGUgaW49J2dyYWluQ29sb3InIGluMj0nYTInIG9wZXJhdG9yPSdpbicgcmVzdWx0PSdncmFpbicvPgogICAgPGZlTWVyZ2U+CiAgICAgIDxmZU1lcmdlTm9kZSBpbj0nYmFzZScvPgogICAgICA8ZmVNZXJnZU5vZGUgaW49J2dyYWluJy8+CiAgICA8L2ZlTWVyZ2U+CiAgPC9maWx0ZXI+CiAgPHJlY3Qgd2lkdGg9JzEwMCUnIGhlaWdodD0nMTAwJScgZmlsdGVyPSd1cmwoI3cpJy8+Cjwvc3ZnPg==");
+  --wood-grain-mahogany: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4MDAnIGhlaWdodD0nNTAwJyB2aWV3Qm94PScwIDAgODAwIDUwMCc+CiAgPGZpbHRlciBpZD0ndycgeD0nMCcgeT0nMCcgd2lkdGg9JzEwMCUnIGhlaWdodD0nMTAwJScgY29sb3ItaW50ZXJwb2xhdGlvbi1maWx0ZXJzPSdzUkdCJz4KICAgIDxmZVR1cmJ1bGVuY2UgdHlwZT0nZnJhY3RhbE5vaXNlJyBiYXNlRnJlcXVlbmN5PScxLjAgMC4wMTQnIG51bU9jdGF2ZXM9JzQnIHNlZWQ9JzQyJyBzdGl0Y2hUaWxlcz0nc3RpdGNoJyByZXN1bHQ9J24nLz4KICAgIDxmZUNvbG9yTWF0cml4IGluPSduJyB0eXBlPSdtYXRyaXgnIHZhbHVlcz0nMCAwIDAgMCAwICAwIDAgMCAwIDAgIDAgMCAwIDAgMCAgMC40IDAuNCAwLjQgMCAwJyByZXN1bHQ9J2EnLz4KICAgIDxmZUNvbXBvbmVudFRyYW5zZmVyIGluPSdhJyByZXN1bHQ9J2EyJz4KICAgICAgPGZlRnVuY0EgdHlwZT0nZ2FtbWEnIGFtcGxpdHVkZT0nMScgZXhwb25lbnQ9JzIuMicgb2Zmc2V0PScwJy8+CiAgICA8L2ZlQ29tcG9uZW50VHJhbnNmZXI+CiAgICA8ZmVGbG9vZCBmbG9vZC1jb2xvcj0nIzQwMjAxOScgcmVzdWx0PSdiYXNlJy8+CiAgICA8ZmVGbG9vZCBmbG9vZC1jb2xvcj0nIzFlMGMwOScgcmVzdWx0PSdncmFpbkNvbG9yJy8+CiAgICA8ZmVDb21wb3NpdGUgaW49J2dyYWluQ29sb3InIGluMj0nYTInIG9wZXJhdG9yPSdpbicgcmVzdWx0PSdncmFpbicvPgogICAgPGZlTWVyZ2U+CiAgICAgIDxmZU1lcmdlTm9kZSBpbj0nYmFzZScvPgogICAgICA8ZmVNZXJnZU5vZGUgaW49J2dyYWluJy8+CiAgICA8L2ZlTWVyZ2U+CiAgPC9maWx0ZXI+CiAgPHJlY3Qgd2lkdGg9JzEwMCUnIGhlaWdodD0nMTAwJScgZmlsdGVyPSd1cmwoI3cpJy8+Cjwvc3ZnPg==");
+  --wood-grain: var(--wood-grain-walnut);
+}
+/* Picked live via the Wood select next to the Theme select (see
+   #wood-select in app.js) -- walnut is the default above, these two just
+   override it. */
+body[data-theme="vinyl"][data-wood="ebony"] { --wood-grain: var(--wood-grain-ebony); }
+body[data-theme="vinyl"][data-wood="mahogany"] { --wood-grain: var(--wood-grain-mahogany); }
+/* 680px, not 610 -- at 610 the plate (disc + tonearm clearance) plus the
+   Track/Vol fader rail don't both fit inside the housing's padded content
+   box, so the rail spills past the housing's right edge onto the flat
+   panel behind it instead of sitting inside the device. */
+body[data-theme="vinyl"] .theme-stage { width: 680px; }
+/* Flat fill matching the theme's own elevated-panel tone -- no pattern, so
+   the turntable housing (with its real wood-grain texture, below) is the
+   only textured surface in the stage instead of competing with a second
+   patterned layer behind it. */
+#stage-vinyl .turntable {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center;
+  min-height: 100%;
+  padding: 26px 26px 26px;
+  background: var(--bg-elevated);
+}
+/* The turntable housing itself, as a distinct object resting on the flat
+   panel behind it -- a raised edge (light top rim, dark underside shadow,
+   drop shadow onto the panel) instead of just blending into the
+   background. --wood-grain is a real (feTurbulence-generated) wood-grain
+   photo-like texture, not a repeating line pattern -- see the
+   body[data-theme="vinyl"] block below for the available finishes. A
+   column so the artist/title display lives inside it too instead of
+   floating below as a separate box. */
+#stage-vinyl .turntable-body {
+  width: 100%; flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px;
+  min-height: 0;
+  padding: 22px 0;
+  border-radius: 10px;
+  background-image: var(--wood-grain);
+  background-size: cover;
+  background-position: center;
+  box-shadow:
+    0 8px 18px rgba(0,0,0,.45),
+    0 2px 5px rgba(0,0,0,.3),
+    inset 0 1px 0 rgba(255,220,180,.16),
+    inset 0 -2px 0 rgba(0,0,0,.4),
+    inset 0 0 0 1px rgba(0,0,0,.3);
+}
+#stage-vinyl .turntable-row {
+  display: flex; align-items: center; justify-content: center;
+}
+#stage-vinyl .turntable-plate {
+  position: relative;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 40px 90px 20px 40px;
+}
+#stage-vinyl .vinyl-rail {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  gap: 22px;
+  padding: 0 18px;
+}
+#stage-vinyl .vinyl-fader-group {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+#stage-vinyl .vinyl-fader-label {
+  font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: #c9a976; font-family: Georgia, serif;
+}
+/* Recessed channel + ridged metal thumb + ruler ticks, like a mixer
+   fader -- the ticks are a plain repeating pattern on the track's own
+   pseudo-element, off to one side of the actual (still rotated-native-
+   range) control. */
+#stage-vinyl .vinyl-fader-track { position: relative; width: 30px; height: 300px; }
+#stage-vinyl .vinyl-fader-track::after {
+  content: "";
+  position: absolute; right: 2px; top: 8px; bottom: 8px; width: 4px;
+  background-image: repeating-linear-gradient(0deg, #c9a227 0 1px, transparent 1px 20px);
+  opacity: .85;
+}
+#stage-vinyl .vinyl-fader {
+  -webkit-appearance: none; appearance: none;
+  position: absolute; top: 50%; left: 50%;
+  width: 284px; height: 16px; margin: 0;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  border-radius: 2px;
+  background: linear-gradient(180deg, #050505, #1c1c1c 50%, #050505);
+  border: 1px solid #4a3a1c;
+  box-shadow: inset 0 2px 5px rgba(0,0,0,.85);
+  cursor: pointer;
+}
+/* Same warm gold used for the knobs and tonearm pivot elsewhere on this
+   deck -- the previous cool-silver ramp here was the one piece of the
+   panel that didn't match the rest of the theme's palette. */
+#stage-vinyl .vinyl-fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px; height: 16px;
+  border-radius: 2px;
+  background:
+    repeating-linear-gradient(180deg, rgba(0,0,0,.3) 0 1.5px, transparent 1.5px 4px),
+    linear-gradient(180deg, #f0d68a, #c9a227 50%, #8a6d1f);
+  border: 1px solid #6b5714;
+  box-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+#stage-vinyl .vinyl-fader::-moz-range-track {
+  height: 16px; border-radius: 2px;
+  background: linear-gradient(180deg, #050505, #1c1c1c 50%, #050505);
+  border: 1px solid #4a3a1c;
+  box-shadow: inset 0 2px 5px rgba(0,0,0,.85);
+}
+#stage-vinyl .vinyl-fader::-moz-range-thumb {
+  width: 26px; height: 16px; border-radius: 2px;
+  background:
+    repeating-linear-gradient(180deg, rgba(0,0,0,.3) 0 1.5px, transparent 1.5px 4px),
+    linear-gradient(180deg, #f0d68a, #c9a227 50%, #8a6d1f);
+  border: 1px solid #6b5714;
+  box-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+#stage-vinyl .vinyl-disc {
+  flex-shrink: 0;
+  width: 350px; height: 350px; border-radius: 50%;
+  background-image:
+    repeating-radial-gradient(circle, rgba(0,0,0,.45) 0 1px, transparent 1px 4px),
+    radial-gradient(circle at 35% 30%, rgba(255,255,255,.1), transparent 55%),
+    var(--vinyl-art, none),
+    radial-gradient(circle, #222 0 30%, #0a0a0a 30% 100%);
+  background-size: cover, cover, cover, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  box-shadow: 0 8px 30px rgba(0,0,0,.6), inset 0 0 0 2px rgba(0,0,0,.5);
+  display: flex; align-items: center; justify-content: center;
+  /* Rotation is driven by JS (see vinylTonearmLoop in app.js), not a CSS
+     @keyframes animation -- a CSS animation left paused across a
+     display:none toggle (switching away from this theme and back) would
+     occasionally get stuck and never resume, which is exactly what "the
+     vinyl stopped spinning after a while of changing themes" was. */
+}
+#stage-vinyl .vinyl-spindle {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #0a0a0a;
+  box-shadow: 0 0 0 2px rgba(201,162,39,.35);
+  position: relative; z-index: 1;
+}
+/* A two-segment bent arm (see ARM_SEG1_LEN/ARM_SEG2_LEN/ARM_BEND_DEG in
+   app.js, which mirror these lengths/angle for the geometry math) on a
+   round chrome mounting plate, closer to a real tonearm's dogleg shape
+   than a single straight rod. */
+#stage-vinyl .tonearm {
+  position: absolute; right: 30px; top: 40px; width: 0; height: 0;
+  transform-origin: 0 0;
+  transform: rotate(6deg);
+  transition: transform .35s cubic-bezier(.4,0,.2,1);
+  z-index: 2;
+}
+#stage-vinyl .tonearm-base {
+  position: absolute; left: 0; top: 0; width: 46px; height: 46px;
+  margin: -23px 0 0 -23px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #eef0f2, #9199a1 55%, #565b61);
+  border: 1px solid #3a3d42;
+  box-shadow: 0 2px 5px rgba(0,0,0,.5), inset 0 1px 1px rgba(255,255,255,.3);
+}
+#stage-vinyl .tonearm-base::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 15px; height: 15px;
+  margin: -7.5px 0 0 -7.5px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #f0d68a, #c9a227 60%, #6b5714);
+  box-shadow: 0 0 0 2px #3a3d42, 0 1px 2px rgba(0,0,0,.5);
+}
+#stage-vinyl .tonearm-seg1 {
+  position: absolute; left: -3.5px; top: 0; width: 7px; height: 180px;
+  transform-origin: top center;
+  background: linear-gradient(90deg, #e6e8ec, #8b8f96 45%, #4a4d52);
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.5), 1px 0 0 rgba(255,255,255,.15) inset;
+}
+#stage-vinyl .tonearm-seg2 {
+  position: absolute; left: 50%; top: 180px; width: 7px; height: 115px;
+  margin-left: -3.5px;
+  transform-origin: top center;
+  transform: rotate(18deg);
+  background: linear-gradient(90deg, #e6e8ec, #8b8f96 45%, #4a4d52);
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.5), 1px 0 0 rgba(255,255,255,.15) inset;
+}
+#stage-vinyl .tonearm-headshell {
+  position: absolute; left: 50%; bottom: -16px; width: 16px; height: 36px; margin-left: -8px;
+  background: linear-gradient(180deg, #d8dade 0%, #52565c 45%, #101012 100%);
+  border-radius: 3px;
+  box-shadow: 0 2px 4px rgba(0,0,0,.5);
+}
+#stage-vinyl .tonearm-headshell::after {
+  content: ""; position: absolute; left: 50%; bottom: 3px; width: 3px; height: 12px;
+  margin-left: -1.5px; border-radius: 1px;
+  background: #c23b3b;
+  box-shadow: 0 0 4px rgba(194,59,59,.7);
+}
+#stage-vinyl .vinyl-nameplate {
+  width: 350px;
+  padding: 9px 16px 10px;
+  background: linear-gradient(180deg, #241c17, #14100f);
+  border: 1px solid #c9a227;
+  border-radius: 6px;
+  /* Recessed into the housing (deeper inset shadow) rather than a
+     separate box floating below it. */
+  box-shadow: inset 0 2px 6px rgba(0,0,0,.55), inset 0 0 0 1px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.05);
+}
+#stage-vinyl .vinyl-nameplate-line {
+  font-family: Georgia, "Times New Roman", serif;
+  white-space: nowrap; overflow: hidden; text-align: center;
+}
+#stage-vinyl .scroll-line-inner { display: inline-block; white-space: nowrap; }
+#stage-vinyl .vinyl-nameplate-artist {
+  font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  color: #a8946b;
+  margin-bottom: 3px;
+}
+#stage-vinyl .vinyl-nameplate-title {
+  font-size: 18px; font-weight: 700;
+  color: #ede2c8;
+}
+#stage-vinyl .vinyl-nameplate-line.scrolling {
+  text-align: left;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+#stage-vinyl .vinyl-nameplate-line.scrolling .scroll-line-inner {
+  animation: vfd-marquee var(--vfd-duration, 6s) ease-in-out infinite;
+}
+
+#stage-vinyl .vinyl-transport {
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+  margin-top: 14px;
+}
+#stage-vinyl .vinyl-btn {
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1; color: #c9a227;
+  background: radial-gradient(circle at 35% 30%, #241f1b, #0c0a09 70%);
+  border: 2px solid #c9a227;
+  box-shadow: 0 0 0 3px #14100f, 0 0 0 4px #4a3a12;
+  cursor: pointer;
+  transition: filter .15s ease;
+}
+#stage-vinyl .vinyl-btn-play { width: 50px; height: 50px; font-size: 16px; }
+#stage-vinyl .vinyl-btn:hover { filter: brightness(1.25); }
+#stage-vinyl .vinyl-btn:active { filter: brightness(.85); }
+
+
+/* ======================================= IMMERSIVE THEME: shared controls ==
+   Each theme below restyles the actual controls (tiles, transport buttons,
+   seek bar, track rows) to match its material, not just the decorative
+   stage strip -- so the whole window feels like the object, not a skin
+   pasted over the default app. */
+
+/* ---------------------------------------------------------- 1. HI-FI RIG -- */
+body[data-theme="hifi"] {
+  background:
+    repeating-linear-gradient(100deg, rgba(255,255,255,.025) 0px, rgba(255,255,255,.025) 1px, transparent 1px, transparent 4px);
+}
+body[data-theme="hifi"] .topbar,
+body[data-theme="hifi"] .sidebar,
+body[data-theme="hifi"] .player-bar {
+  background:
+    repeating-linear-gradient(100deg, rgba(255,255,255,.02) 0px, rgba(255,255,255,.02) 1px, transparent 1px, transparent 4px),
+    var(--bg-elevated);
+  border-color: #000;
+}
+body[data-theme="hifi"] .topbar { box-shadow: 0 1px 0 rgba(255,255,255,.06) inset; }
+body[data-theme="hifi"] .brand,
+body[data-theme="hifi"] .playlists-header h3,
+body[data-theme="hifi"] .filter-group label {
+  font-family: var(--font-hifi); font-weight: 700; letter-spacing: .06em;
+}
+
+body[data-theme="hifi"] .tile {
+  background:
+    repeating-linear-gradient(98deg, rgba(255,255,255,.16) 0px, rgba(255,255,255,.16) .6px, transparent .6px, transparent 2.1px),
+    repeating-linear-gradient(101deg, rgba(0,0,0,.08) 0px, rgba(0,0,0,.08) .5px, transparent .5px, transparent 3.3px),
+    linear-gradient(115deg, rgba(255,255,255,.3) 0%, transparent 25%, transparent 65%, rgba(255,255,255,.15) 100%),
+    linear-gradient(180deg, #cfcfcf, #9a9a9a 45%, #838383 55%, #b8b8b8);
+  border: 1px solid #6b6b6b;
+  border-radius: 3px;
+  color: #1a1a1a;
+  box-shadow: 0 1px 0 rgba(255,255,255,.5) inset, 0 -2px 3px rgba(0,0,0,.25) inset;
+}
+body[data-theme="hifi"] .tile:hover { filter: brightness(1.05); }
+body[data-theme="hifi"] .tile:active { box-shadow: 0 2px 4px rgba(0,0,0,.4) inset; transform: translateY(1px); }
+body[data-theme="hifi"] .tile-label { color: #2a2a2a; font-family: var(--font-hifi); font-weight: 700; }
+body[data-theme="hifi"] .tile-icon::after {
+  content: ""; display: block; width: 6px; height: 6px; border-radius: 50%;
+  margin: 3px auto 0; background: var(--dot, var(--accent));
+  box-shadow: 0 0 4px var(--dot, var(--accent));
+}
+body[data-theme="hifi"] .tile-blue,
+body[data-theme="hifi"] .tile-green,
+body[data-theme="hifi"] .tile-purple,
+body[data-theme="hifi"] .tile-teal,
+body[data-theme="hifi"] .tile-orange,
+body[data-theme="hifi"] .tile-magenta { --dot: var(--accent); }
+
+body[data-theme="hifi"] .btn-icon,
+body[data-theme="hifi"] .btn-small,
+body[data-theme="hifi"] .btn-secondary,
+body[data-theme="hifi"] .btn-primary {
+  background:
+    repeating-linear-gradient(98deg, rgba(255,255,255,.16) 0px, rgba(255,255,255,.16) .6px, transparent .6px, transparent 2.1px),
+    repeating-linear-gradient(101deg, rgba(0,0,0,.08) 0px, rgba(0,0,0,.08) .5px, transparent .5px, transparent 3.3px),
+    linear-gradient(115deg, rgba(255,255,255,.3) 0%, transparent 25%, transparent 65%, rgba(255,255,255,.15) 100%),
+    linear-gradient(180deg, #cfcfcf, #9a9a9a 45%, #838383 55%, #b8b8b8);
+  border: 1px solid #6b6b6b; color: #1a1a1a; border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(255,255,255,.5) inset;
+  font-family: var(--font-hifi); font-weight: 700;
+}
+body[data-theme="hifi"] .btn-icon:hover,
+body[data-theme="hifi"] .btn-small:hover { filter: brightness(1.08); }
+body[data-theme="hifi"] .btn-icon:active { transform: translateY(1px); }
+
+body[data-theme="hifi"] .seek {
+  -webkit-appearance: none; height: 4px; border-radius: 0;
+  background: linear-gradient(90deg, var(--accent) var(--fill, 0%), #444 var(--fill, 0%));
+  border: 1px solid #000;
+}
+body[data-theme="hifi"] .seek::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 10px; height: 18px; margin-top: -1px;
+  background: linear-gradient(180deg, #e0e0e0, #909090);
+  border: 1px solid #333; border-radius: 2px;
+  box-shadow: 0 0 3px rgba(0,0,0,.6);
+}
+body[data-theme="hifi"] .time-display,
+body[data-theme="hifi"] .np-sub { font-family: var(--font-hifi); color: var(--accent); }
+body[data-theme="hifi"] .np-title { font-family: var(--font-hifi); font-weight: 700; }
+
+body[data-theme="hifi"] .track-row { font-family: var(--font-hifi); border-bottom: 1px solid rgba(255,255,255,.03); }
+body[data-theme="hifi"] .track-row:hover { background: #2e2416; }
+body[data-theme="hifi"] .track-row.playing { background: #3a2c14; box-shadow: inset 3px 0 0 var(--accent); }
+body[data-theme="hifi"] .track-row.playing .col-title { color: var(--accent); text-shadow: 0 0 4px rgba(var(--accent-rgb),.5); }
+body[data-theme="hifi"] .col-idx { color: #6b6459; }
+
+/* -------------------------------------------------------- 2. CASSETTE DECK -- */
+body[data-theme="cassette"] {
+  background:
+    repeating-linear-gradient(45deg, rgba(255,255,255,.015) 0 2px, transparent 2px 6px),
+    var(--bg);
+}
+body[data-theme="cassette"] .topbar,
+body[data-theme="cassette"] .sidebar,
+body[data-theme="cassette"] .player-bar {
+  background: linear-gradient(180deg, #262626, #141414);
+  border-color: #0a0a0a;
+}
+body[data-theme="cassette"] .brand,
+body[data-theme="cassette"] .playlists-header h3 { font-family: "Courier New", monospace; }
+
+body[data-theme="cassette"] .tile {
+  background: linear-gradient(180deg, #4c4c4c, #2a2a2a 55%, #1c1c1c);
+  border: 1px solid #0a0a0a; border-radius: 3px;
+  color: #c9c0b0;
+  box-shadow: 0 3px 0 #000, inset 0 1px 0 rgba(255,255,255,.15);
+  transition: color .15s ease;
+}
+body[data-theme="cassette"] .tile:hover { color: var(--accent); }
+body[data-theme="cassette"] .tile:active {
+  transform: translateY(3px);
+  box-shadow: 0 0 0 #000, inset 0 2px 5px rgba(0,0,0,.6);
+}
+body[data-theme="cassette"] .tile-label { color: #c9c0b0; transition: color .15s ease; }
+body[data-theme="cassette"] .tile:hover .tile-label { color: var(--accent); }
+
+body[data-theme="cassette"] .btn-icon,
+body[data-theme="cassette"] .btn-small,
+body[data-theme="cassette"] .btn-secondary,
+body[data-theme="cassette"] .btn-primary {
+  background: linear-gradient(180deg, #4c4c4c, #2a2a2a 55%, #1c1c1c);
+  border: 1px solid #0a0a0a; color: #c9c0b0; border-radius: 3px;
+  box-shadow: 0 3px 0 #000, inset 0 1px 0 rgba(255,255,255,.15);
+  transition: color .15s ease;
+}
+body[data-theme="cassette"] .btn-icon:hover,
+body[data-theme="cassette"] .btn-small:hover,
+body[data-theme="cassette"] .btn-secondary:hover,
+body[data-theme="cassette"] .btn-primary:hover { color: var(--accent); }
+body[data-theme="cassette"] .btn-icon:active,
+body[data-theme="cassette"] .btn-small:active,
+body[data-theme="cassette"] .btn-secondary:active,
+body[data-theme="cassette"] .btn-primary:active {
+  transform: translateY(3px);
+  box-shadow: 0 0 0 #000, inset 0 2px 5px rgba(0,0,0,.6);
+}
+
+body[data-theme="cassette"] .seek {
+  -webkit-appearance: none; height: 3px; border-radius: 0;
+  background: repeating-linear-gradient(90deg, #5a5a5a 0 1px, transparent 1px 8px), #d6d2c4;
+  border: 1px solid #0a0a0a;
+}
+body[data-theme="cassette"] .seek::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 10px; height: 14px; margin-top: -6px;
+  background: #3ecf6e; border: 1px solid #0a0a0a; border-radius: 1px;
+}
+body[data-theme="cassette"] .np-title, body[data-theme="cassette"] .np-sub,
+body[data-theme="cassette"] .time-display { font-family: "Courier New", monospace; }
+
+body[data-theme="cassette"] .track-row { font-family: "Courier New", monospace; }
+body[data-theme="cassette"] .track-row:hover { background: #2e2e2e; }
+body[data-theme="cassette"] .track-row.playing {
+  background: #2a2a2a;
+  box-shadow: inset 3px 0 0 #3ecf6e;
+}
+body[data-theme="cassette"] .track-row.playing .col-title { color: #7fe89f; }
+body[data-theme="cassette"] .col-idx { color: #7a7a7a; }
+
+/* -------------------------------------------------------- 3. VINYL LOUNGE -- */
+body[data-theme="vinyl"] {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(201,162,39,.045), transparent 60%),
+    var(--bg);
+}
+body[data-theme="vinyl"] .topbar,
+body[data-theme="vinyl"] .sidebar,
+body[data-theme="vinyl"] .player-bar {
+  background: linear-gradient(180deg, #1c1613, #100c0a);
+  border-color: #3a2f22;
+}
+body[data-theme="vinyl"] .topbar { border-bottom: 1px solid #c9a227; }
+body[data-theme="vinyl"] .sidebar { border-right: 1px solid #3a2f22; }
+body[data-theme="vinyl"] .brand { font-family: Georgia, "Times New Roman", serif; letter-spacing: .02em; }
+body[data-theme="vinyl"] .playlists-header h3,
+body[data-theme="vinyl"] .filter-group label { font-family: Georgia, serif; }
+
+body[data-theme="vinyl"] .tile {
+  background: linear-gradient(180deg, #241a16, #150f0c);
+  border: 1px solid #c9a227; border-radius: 10px;
+  color: #c9a227;
+  box-shadow: inset 0 0 0 1px #14100f, inset 0 1px 0 rgba(255,255,255,.05);
+}
+body[data-theme="vinyl"] .tile:hover { background: linear-gradient(180deg, #322520, #1c1613); }
+body[data-theme="vinyl"] .tile-label { color: #c9a227; font-family: Georgia, serif; }
+body[data-theme="vinyl"] .tile-icon { filter: sepia(.35) saturate(1.6) hue-rotate(-10deg) brightness(.95); }
+
+body[data-theme="vinyl"] .btn-icon {
+  background: radial-gradient(circle at 35% 30%, #241f1b, #0c0a09 70%);
+  border: 2px solid #c9a227; color: #c9a227; border-radius: 50%;
+  box-shadow: 0 0 0 3px #14100f, 0 0 0 4px #4a3a12;
+}
+body[data-theme="vinyl"] .btn-small,
+body[data-theme="vinyl"] .btn-secondary,
+body[data-theme="vinyl"] .btn-primary {
+  background: linear-gradient(180deg, #241c17, #14100f);
+  border: 1px solid #c9a227; color: #c9a227; border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.05);
+}
+body[data-theme="vinyl"] .btn-icon:hover,
+body[data-theme="vinyl"] .btn-small:hover { filter: brightness(1.2); }
+
+body[data-theme="vinyl"] .seek {
+  -webkit-appearance: none; height: 3px; border-radius: 2px;
+  background: repeating-radial-gradient(circle at 0 50%, #3a2f22 0 1px, transparent 1px 3px), #1c1613;
+  border: 1px solid #3a2f22;
+}
+body[data-theme="vinyl"] .seek::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 12px; height: 12px; margin-top: -5px;
+  background: #c9a227; border-radius: 50%; box-shadow: 0 0 4px rgba(201,162,39,.7);
+}
+body[data-theme="vinyl"] .np-title { font-family: Georgia, serif; }
+
+body[data-theme="vinyl"] .track-row:hover { background: #201914; }
+body[data-theme="vinyl"] .track-row.playing {
+  background: linear-gradient(90deg, rgba(201,162,39,.12), transparent);
+  box-shadow: inset 3px 0 0 #c9a227;
+}
+body[data-theme="vinyl"] .track-row.playing .col-title { color: #c9a227; }
+body[data-theme="vinyl"] .col-idx { color: #7a6a4a; font-family: Georgia, serif; }
+body[data-theme="vinyl"] .col-art { border-radius: 50%; }
+

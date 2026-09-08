@@ -1,0 +1,6 @@
+flask
+mutagen
+langdetect
+pyinstaller
+pywebview
+pythonnet; platform_system == "Windows"

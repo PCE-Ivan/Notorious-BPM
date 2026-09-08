@@ -1,0 +1,5 @@
+flask
+mutagen
+langdetect
+pyinstaller
+pywebview[gtk]
