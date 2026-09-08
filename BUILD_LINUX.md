@@ -1,15 +1,24 @@
 # Running (and optionally building) Notorious B.P.M. on Linux
 
 This has now actually been built and tested end-to-end on a real ARM64
-Ubuntu machine (a VM on Apple Silicon) — running from source, a PyInstaller
-standalone build, and a real music library (15,000+ tracks on a FAT32 USB
-drive) all confirmed working, including the native GTK window and Live
-Radio's VU meters. Almost all of the app's code is already fully
-cross-platform (it already picks the right config folder, file dialogs,
-etc. for whichever OS it's running on) — nothing in `app.py`, `config.py`,
-`scan_library.py`, or `launcher.py` needed to change for Linux at all. The
-only Linux-specific things are the system packages pywebview needs for its
-native window, listed below.
+Ubuntu machine (a VM on Apple Silicon), with a real music library (15,000+
+tracks on a FAT32 USB drive). Confirmed working: running from source,
+a PyInstaller standalone build, the native GTK window, and the Hi-Fi/
+Cassette VU meters reacting to local file playback (tested on the actual
+built binary, not just from source). Live Radio's own VU meters (the
+ffmpeg-based ones, for internet radio specifically) were confirmed working
+from source earlier in the same testing session, but not re-confirmed on
+the built binary specifically — the test VM's internet access was down at
+the time. No reason to expect it'd behave differently (identical Python
+server code either way), but this note is here so "confirmed working"
+means exactly what was actually checked, not more.
+
+Almost all of the app's code is already fully cross-platform (it already
+picks the right config folder, file dialogs, etc. for whichever OS it's
+running on) — nothing in `app.py`, `config.py`, `scan_library.py`, or
+`launcher.py` needed to change for Linux at all. The only Linux-specific
+things are the system packages pywebview needs for its native window,
+listed below.
 
 **Architecture note:** a build made on one CPU architecture only runs on
 that same architecture — an ARM64 build (like the one tested) won't run on
