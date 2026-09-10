@@ -14,6 +14,7 @@ import datetime
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.parse
 import urllib.request
 
@@ -236,6 +237,7 @@ def _run_scan_bg():
         _scan_state["error"] = str(e)
     finally:
         _scan_state["running"] = False
+        _invalidate_dup_plan_cache()
 
 
 def _start_scan_bg():
@@ -676,6 +678,9 @@ def update_tag(track_id):
     else:
         db.execute(f"UPDATE tracks SET {field}=? WHERE id=?", (value, track_id))
     db.commit()
+    if field in ("artist", "title"):
+        # These are exactly what duplicate-grouping keys off of.
+        _invalidate_dup_plan_cache()
     return jsonify({"ok": True, "track_id": track_id, "field": field, "value": value})
 
 
@@ -706,38 +711,86 @@ def _read_raw_tag_presence(fpath):
     return True, True, True
 
 
+_deep_scan_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
+_deep_scan_lock = threading.Lock()
+_DEEP_SCAN_WORKERS = 8  # I/O-bound (opening+reading file headers), not CPU-bound -- threads are fine
+
+
+def _run_deep_scan_bg(rows):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            total = len(rows)
+            checked = 0
+
+            def _check_one(row):
+                fpath = os.path.join(MUSIC_DIR, row["path"])
+                presence = (
+                    _read_raw_tag_presence(fpath) if os.path.isfile(fpath) else (True, True, True)
+                )
+                return row["id"], presence
+
+            # Reading each file (open + parse tag header) is the slow part
+            # and fully independent per file -- farming it out across a
+            # small thread pool overlaps that I/O instead of doing it one
+            # file at a time, while the actual sqlite writes stay on this
+            # one thread/connection either way (sqlite doesn't want
+            # concurrent writers, and they're cheap compared to the reads).
+            with ThreadPoolExecutor(max_workers=_DEEP_SCAN_WORKERS) as pool:
+                for track_id, (has_artist, has_title, has_art) in pool.map(_check_one, rows):
+                    conn.execute(
+                        "UPDATE tracks SET has_artist_tag=?, has_title_tag=?, has_art=? WHERE id=?",
+                        (int(has_artist), int(has_title), int(has_art), track_id),
+                    )
+                    checked += 1
+                    _deep_scan_state["done"] = checked
+                    _deep_scan_state["total"] = total
+                    if checked % 500 == 0:
+                        conn.commit()
+            conn.commit()
+
+            result = {"checked": checked}
+            for key, col in (("artist", "has_artist_tag"), ("title", "has_title_tag"), ("art", "has_art")):
+                found = conn.execute(
+                    f"SELECT id, artist, title, album, year, primary_genre as genre FROM tracks "
+                    f"WHERE {col} = 0 ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE"
+                ).fetchall()
+                tracks = [dict(r) for r in found]
+                result[key] = {"count": len(tracks), "tracks": tracks}
+            _deep_scan_state["result"] = result
+        finally:
+            conn.close()
+    except Exception as e:
+        _deep_scan_state["error"] = str(e)
+    finally:
+        _deep_scan_state["running"] = False
+
+
 @app.route("/api/tags/deep-scan", methods=["POST"])
 def tags_deep_scan():
     """Opens every file directly to check for a real artist tag, title tag,
     and embedded cover art -- slow (a full pass over the library), unlike
-    the instant DB-only audit above. Results are cached on the tracks table
-    so this only needs to re-run when the user explicitly asks for it."""
+    the instant DB-only audit above. Runs in the background with progress
+    polling (same shape as fill-genres/fill-years/rescan) since a blocking
+    request with no feedback over tens of thousands of files looks
+    indistinguishable from hung. Results are cached on the tracks table so
+    this only needs to re-run when the user explicitly asks for it."""
     db = get_db()
-    rows = db.execute("SELECT id, path FROM tracks").fetchall()
-    checked = 0
-    for row in rows:
-        fpath = os.path.join(MUSIC_DIR, row["path"])
-        has_artist, has_title, has_art = (
-            _read_raw_tag_presence(fpath) if os.path.isfile(fpath) else (True, True, True)
-        )
-        db.execute(
-            "UPDATE tracks SET has_artist_tag=?, has_title_tag=?, has_art=? WHERE id=?",
-            (int(has_artist), int(has_title), int(has_art), row["id"]),
-        )
-        checked += 1
-        if checked % 500 == 0:
-            db.commit()
-    db.commit()
+    rows = [dict(r) for r in db.execute("SELECT id, path FROM tracks").fetchall()]
 
-    result = {"checked": checked}
-    for key, col in (("artist", "has_artist_tag"), ("title", "has_title_tag"), ("art", "has_art")):
-        found = db.execute(
-            f"SELECT id, artist, title, album, year, primary_genre as genre FROM tracks "
-            f"WHERE {col} = 0 ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE"
-        ).fetchall()
-        tracks = [dict(r) for r in found]
-        result[key] = {"count": len(tracks), "tracks": tracks}
-    return jsonify(result)
+    with _deep_scan_lock:
+        if _deep_scan_state["running"]:
+            return jsonify({"started": False, "error": "Already running"})
+        _deep_scan_state.update(running=True, done=0, total=len(rows), result=None, error=None)
+        close_db(None)
+        threading.Thread(target=_run_deep_scan_bg, args=(rows,), daemon=True).start()
+    return jsonify({"started": True, "total": len(rows)})
+
+
+@app.route("/api/tags/deep-scan/progress")
+def tags_deep_scan_progress():
+    return jsonify(_deep_scan_state)
 
 
 @app.route("/api/config")
@@ -932,8 +985,105 @@ def convert_track(track_id):
     return jsonify(result)
 
 
+_convert_state = {"running": False, "done": 0, "total": 0, "results": None, "error": None}
+_convert_lock = threading.Lock()
+_CONVERT_WORKERS = 4  # each is a real ffmpeg transcode -- CPU/disk heavy, unlike the tag-scan's light file reads
+
+
+def _convert_one_file(track_id, fpath, artist, title, fmt):
+    """The actual conversion work, run in a worker thread -- deliberately
+    takes plain file/tag values rather than a db handle, so no sqlite
+    connection is ever touched off the main thread (sqlite3 connections
+    aren't safe to share across concurrent threads)."""
+    import convert_audio
+    try:
+        out_path, already_existed = convert_audio.convert(fpath, artist, title, fmt)
+        return {"track_id": track_id, "ok": True, "output_path": out_path, "already_existed": already_existed}
+    except Exception as e:
+        return {"track_id": track_id, "ok": False, "error": str(e)}
+
+
+def _run_convert_bg(track_ids, fmt):
+    try:
+        import importlib
+        import convert_audio
+        importlib.reload(convert_audio)
+
+        # All the sqlite reads happen here, up front, on this one thread --
+        # the thread pool below only ever calls _convert_one_file, which
+        # touches files and ffmpeg, never the database.
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" * len(track_ids))
+            rows_by_id = {
+                r["id"]: r for r in conn.execute(
+                    f"SELECT id, path, artist, title, ext FROM tracks WHERE id IN ({placeholders})",
+                    track_ids,
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+
+        total = len(track_ids)
+        done = 0
+        results = [None] * total
+        to_submit = {}  # future -> index, only for tracks that actually need converting
+        for i, track_id in enumerate(track_ids):
+            row = rows_by_id.get(track_id)
+            if not row:
+                results[i] = {"track_id": track_id, "ok": False, "error": "track not found"}
+                continue
+            src_ext = row["ext"].lstrip(".").lower()
+            src_fmt = {"flac": "flac", "m4a": "alac", "mp3": "mp3320"}.get(src_ext)
+            if src_fmt == fmt:
+                results[i] = {
+                    "track_id": track_id, "ok": False,
+                    "error": f"already {convert_audio.FORMATS[fmt]['label']}",
+                }
+                continue
+            fpath = os.path.join(MUSIC_DIR, row["path"])
+            to_submit[i] = (track_id, fpath, row["artist"], row["title"])
+
+        done = total - len(to_submit)
+        _convert_state["done"] = done
+        _convert_state["total"] = total
+
+        with ThreadPoolExecutor(max_workers=_CONVERT_WORKERS) as pool:
+            futures = {
+                pool.submit(_convert_one_file, track_id, fpath, artist, title, fmt): i
+                for i, (track_id, fpath, artist, title) in to_submit.items()
+            }
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+                done += 1
+                _convert_state["done"] = done
+
+        ok = sum(1 for r in results if r["ok"])
+        _convert_state["results"] = {
+            "total": total, "converted": ok, "failed": total - ok, "results": results,
+        }
+    except Exception as e:
+        _convert_state["error"] = str(e)
+    finally:
+        _convert_state["running"] = False
+
+
+def _start_convert(track_ids, fmt):
+    with _convert_lock:
+        if _convert_state["running"]:
+            return None
+        _convert_state.update(running=True, done=0, total=len(track_ids), results=None, error=None)
+        close_db(None)
+        threading.Thread(target=_run_convert_bg, args=(track_ids, fmt), daemon=True).start()
+    return len(track_ids)
+
+
 @app.route("/api/convert-tracks", methods=["POST"])
 def convert_tracks():
+    """Bulk-converts a set of tracks in the background (each one is a real
+    ffmpeg transcode -- for a big selection, minutes rather than seconds),
+    with progress polling, same shape as the other long-running jobs."""
     data = request.get_json(force=True, silent=True) or {}
     fmt = data.get("format")
     track_ids = data.get("track_ids") or []
@@ -942,10 +1092,10 @@ def convert_tracks():
     importlib.reload(convert_audio)
     if fmt not in convert_audio.FORMATS or not track_ids:
         abort(400)
-    db = get_db()
-    results = [_convert_track_row(db, tid, fmt) for tid in track_ids]
-    ok = sum(1 for r in results if r["ok"])
-    return jsonify({"total": len(results), "converted": ok, "failed": len(results) - ok, "results": results})
+    total = _start_convert(track_ids, fmt)
+    if total is None:
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True, "total": total})
 
 
 @app.route("/api/playlists/<int:playlist_id>/convert", methods=["POST"])
@@ -961,9 +1111,17 @@ def convert_playlist(playlist_id):
     track_ids = [r["track_id"] for r in db.execute(
         "SELECT track_id FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (playlist_id,)
     ).fetchall()]
-    results = [_convert_track_row(db, tid, fmt) for tid in track_ids]
-    ok = sum(1 for r in results if r["ok"])
-    return jsonify({"total": len(results), "converted": ok, "failed": len(results) - ok, "results": results})
+    if not track_ids:
+        abort(400)
+    total = _start_convert(track_ids, fmt)
+    if total is None:
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True, "total": total})
+
+
+@app.route("/api/convert-tracks/progress")
+def convert_tracks_progress():
+    return jsonify(_convert_state)
 
 
 @app.route("/api/facets")
@@ -1129,13 +1287,61 @@ def _find_repeat_download_dupes(db):
     return to_delete, clean_groups
 
 
+def _resolve_same_recording(tracks):
+    """For a group where every copy is a "plain" version (no Live/Remaster/
+    Mix marker to prefer one over another -- see _plan_auto_clean's
+    "no_edition_to_remove" case), tries to pick a keeper anyway: same
+    artist and title already established the group, so if the durations
+    also agree closely, these are almost certainly the same recording
+    from different sources/rips rather than different songs that happen
+    to share a title. Picks the highest apparent bitrate (file size ÷
+    duration -- cheap to compute, no need to actually decode anything) as
+    the keeper and returns the rest for removal.
+
+    Returns None (leave for manual review) rather than guess when:
+    - there are fewer than 2 usable tracks (nothing to compare)
+    - any duration is missing (can't judge "close enough")
+    - durations disagree by more than a small tolerance -- a real
+      difference here (not just encoder rounding) more likely means a
+      genuinely different edit/recording despite the identical title,
+      which this should never silently delete one side of
+    - any file is missing or unreadable (can't score it -- safer to
+      leave the whole group for a human than guess blind)
+    """
+    if len(tracks) < 2:
+        return None
+    durations = [t.get("duration") for t in tracks]
+    if any(d is None for d in durations):
+        return None
+    tolerance = max(2.0, 0.03 * (sum(durations) / len(durations)))
+    if max(durations) - min(durations) > tolerance:
+        return None
+
+    scored = []
+    for t in tracks:
+        fpath = os.path.join(MUSIC_DIR, t["path"])
+        try:
+            size = os.path.getsize(fpath)
+        except OSError:
+            return None
+        duration = t["duration"] or 0
+        bitrate_proxy = (size / duration) if duration else 0
+        scored.append((bitrate_proxy, t))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    keep = scored[0][1]
+    remove = [t for _, t in scored[1:]]
+    return keep, remove
+
+
 def _plan_auto_clean(db):
     """For each duplicate group that has both a plain (album) version and at
     least one Live/Remastered/Mix version, delete only the Live/Remastered/
     Mix ones -- every plain version is left untouched, so this can never
     remove someone's only copy of a studio track. Groups with no plain
-    version (nothing to prefer) or no non-album version (nothing to remove)
-    are skipped, and reported back with a reason so they can be reviewed.
+    version (nothing to prefer) are skipped outright (all_non_album).
+    Groups where every copy is plain (no_edition_to_remove) get a second
+    chance below via _resolve_same_recording before giving up on them.
     Separately, repeat-downloaded copies (see _find_repeat_download_dupes)
     are folded into the same removal list, since those are just as safe to
     clean up automatically and are often the bulk of a library's actual
@@ -1144,12 +1350,27 @@ def _plan_auto_clean(db):
     groups = _find_duplicate_groups(db)
     to_delete = []
     groups_cleaned = 0
+    same_recording_cleaned = 0
     skipped = []  # (group, reason) -- filtered against repeat-download results below
     for group in groups:
         plain = [t for t in group["tracks"] if not _is_non_album_version(t)]
         non_album = [t for t in group["tracks"] if _is_non_album_version(t)]
-        if not plain or not non_album:
-            skipped.append((group, "all_non_album" if not plain else "no_edition_to_remove"))
+        if not plain:
+            skipped.append((group, "all_non_album"))
+            continue
+        if not non_album:
+            # Every copy is "plain" -- no edition marker to prefer one
+            # over another by title alone. Worth a second look: if their
+            # durations agree closely too, they're almost certainly the
+            # same recording from different sources, safe to resolve by
+            # apparent audio quality instead of leaving for manual review.
+            resolved = _resolve_same_recording(plain)
+            if resolved is None:
+                skipped.append((group, "no_edition_to_remove"))
+                continue
+            _keep, remove = resolved
+            same_recording_cleaned += 1
+            to_delete.extend(remove)
             continue
         groups_cleaned += 1
         to_delete.extend(non_album)
@@ -1181,7 +1402,39 @@ def _plan_auto_clean(db):
                 "tracks": remaining,
             })
 
-    return to_delete, groups_cleaned, skipped_groups, len(repeat_groups)
+    return to_delete, groups_cleaned, skipped_groups, len(repeat_groups), same_recording_cleaned
+
+
+# _plan_auto_clean() does two full-table scans (title/artist regex
+# normalization over every track, plus a second pass clustering by
+# filename) -- cheap for one call, but the duplicates panel's own normal
+# use recomputes it from scratch on every single call: opening the panel,
+# every page of the review list, each one a fresh multi-second pass over
+# the whole library for data that hasn't changed since the panel opened.
+# Cached here, invalidated explicitly wherever tracks actually change
+# (scan, tag edits to artist/title, any duplicate-related delete) with a
+# short TTL as a safety net for any mutation path that doesn't explicitly
+# invalidate it.
+_dup_plan_cache = {"result": None, "computed_at": 0.0}
+_DUP_PLAN_CACHE_TTL = 30  # seconds
+_dup_plan_cache_lock = threading.Lock()
+
+
+def _get_cached_dup_plan(db):
+    with _dup_plan_cache_lock:
+        cached = _dup_plan_cache["result"]
+        if cached is not None and (time.time() - _dup_plan_cache["computed_at"]) < _DUP_PLAN_CACHE_TTL:
+            return cached
+    result = _plan_auto_clean(db)
+    with _dup_plan_cache_lock:
+        _dup_plan_cache["result"] = result
+        _dup_plan_cache["computed_at"] = time.time()
+    return result
+
+
+def _invalidate_dup_plan_cache():
+    with _dup_plan_cache_lock:
+        _dup_plan_cache["result"] = None
 
 
 _dup_clean_state = {"running": False, "done": 0, "total": 0, "deleted": 0, "errors": None, "error": None}
@@ -1208,6 +1461,7 @@ def _run_dup_clean_bg(rows):
         _dup_clean_state["error"] = str(e)
     finally:
         _dup_clean_state["running"] = False
+        _invalidate_dup_plan_cache()
 
 
 @app.route("/api/duplicates/auto-clean", methods=["POST"])
@@ -1227,7 +1481,7 @@ def duplicates_auto_clean():
     dry_run = data.get("dry_run", True)
 
     db = get_db()
-    to_delete, groups_cleaned, skipped_groups, repeat_groups_cleaned = _plan_auto_clean(db)
+    to_delete, groups_cleaned, skipped_groups, repeat_groups_cleaned, same_recording_cleaned = _get_cached_dup_plan(db)
     groups_skipped = len(skipped_groups)
 
     if dry_run:
@@ -1236,6 +1490,7 @@ def duplicates_auto_clean():
             "groups_cleaned": groups_cleaned,
             "groups_skipped": groups_skipped,
             "repeat_groups_cleaned": repeat_groups_cleaned,
+            "same_recording_cleaned": same_recording_cleaned,
             "tracks": [{"artist": t["artist"], "title": t["title"]} for t in to_delete],
             "skipped_groups": skipped_groups,
         })
@@ -1261,7 +1516,7 @@ def duplicates_review():
     no clearly-lesser edition and no literal repeat-downloaded file) -- for
     a human to look through and pick which copy to keep."""
     db = get_db()
-    _to_delete, _groups_cleaned, skipped_groups, _repeat_groups_cleaned = _plan_auto_clean(db)
+    _to_delete, _groups_cleaned, skipped_groups, _repeat_groups_cleaned, _same_recording_cleaned = _get_cached_dup_plan(db)
 
     limit = min(int(request.args.get("limit", 20)), 50)
     offset = int(request.args.get("offset", 0))
@@ -1721,6 +1976,7 @@ def delete_tracks_route():
         f"SELECT id, path, artist, title, album FROM tracks WHERE id IN ({placeholders})", track_ids
     ).fetchall()
     deleted, errors = _delete_track_rows(db, rows)
+    _invalidate_dup_plan_cache()
     return jsonify({"ok": True, "deleted": deleted, "errors": errors})
 
 

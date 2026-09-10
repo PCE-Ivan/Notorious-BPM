@@ -427,7 +427,14 @@ const audio = el("audio");
 // itself is never touched by Web Audio at all, so AirPlay stays exactly as
 // native-clean as if the meters didn't exist.
 const vuAudio = new Audio();
-vuAudio.muted = true;
+// NOT muted, deliberately -- see ensureAudioGraph's comment for why:
+// Chromium-family engines (WebView2 on Windows, confirmed; regular Chrome
+// likely too) skip real audio decoding/processing for a muted element
+// even once it's been tapped by createMediaElementSource, so the
+// analyser only ever sees silence (JB-012). Actual silence comes from
+// ensureAudioGraph never connecting this graph to audioCtx.destination,
+// which doesn't have that problem on any engine tested so far.
+vuAudio.muted = false;
 vuAudio.preload = "none";
 // Mirrors whatever `audio` is doing via its own standard events, so every
 // existing play/pause/seek call site (togglePlayPause, the keyboard
@@ -1286,10 +1293,9 @@ function ensureAudioGraph() {
   // Taps vuAudio (see its own definition above), never the real `audio`
   // element -- and never connects to audioCtx.destination at all, since
   // this graph only exists to feed the analyser numbers, not to be heard.
-  // vuAudio is already muted, but skipping the destination connection
-  // means its captured audio has nowhere to go regardless, so there's no
-  // way for it to produce a second, phantom output even if muted somehow
-  // didn't hold. Only ever called for local file playback (see
+  // vuAudio is deliberately NOT muted (see its own definition) -- this
+  // missing destination connection is what actually keeps it silent.
+  // Only ever called for local file playback (see
   // startVuLoopIfNeeded/startCasVisLoopIfNeeded) -- internet radio uses
   // server-computed levels instead, since WebKit has long-standing bugs
   // where this never produces usable data for network-streamed audio at
@@ -1751,12 +1757,28 @@ async function runConvert(endpoint, body, btnEl, resultTextFn) {
   setTileText(btnEl, "Converting…");
   btnEl.disabled = true;
   try {
-    const result = await api(endpoint, {
+    const started = await api(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    setTileText(btnEl, resultTextFn(result));
+    if (started.error) {
+      setTileText(btnEl, started.error === "Already running" ? "Already running…" : "Failed");
+      return;
+    }
+    // Each file is a real ffmpeg transcode -- runs in the background with
+    // progress polling, same shape as the other long-running jobs, since a
+    // big batch can take minutes and a static "Converting…" the whole time
+    // looks indistinguishable from stuck.
+    const status = await pollProgress("/convert-tracks/progress", (s) => {
+      setTileText(btnEl, s.total ? `Converting… ${s.done}/${s.total}` : "Converting…");
+      return s.running;
+    });
+    if (status.error) {
+      setTileText(btnEl, "Failed");
+      return;
+    }
+    setTileText(btnEl, resultTextFn(status.results));
   } catch (e) {
     setTileText(btnEl, "Failed");
   } finally {
@@ -2016,25 +2038,52 @@ async function runDeepScan() {
   const btn = el("tags-deepscan-btn");
   const original = btn.textContent;
   btn.disabled = true;
-  btn.textContent = "Deep scanning… this can take several minutes";
   el("tags-deep-results").innerHTML = "";
+
+  const started = await api("/tags/deep-scan", { method: "POST" });
+  if (started.error) {
+    btn.disabled = false;
+    if (started.error !== "Already running") alert(started.error);
+    else btn.textContent = "Already running…";
+    return;
+  }
+
+  let status;
   try {
-    const data = await api("/tags/deep-scan", { method: "POST" });
-    let anyIssues = false;
-    checks.forEach((key) => {
-      const info = data[key];
-      if (!info || info.count === 0) return;
-      anyIssues = true;
-      renderTagIssueSection(el("tags-deep-results"), key, info);
+    // Runs in the background on the server (opening tens of thousands of
+    // files can take a while even parallelized) -- poll instead of one
+    // long blocking request, so the button always shows real progress
+    // instead of a static "this can take a while" with no way to tell
+    // it apart from actually hanging.
+    status = await pollProgress("/tags/deep-scan/progress", (s) => {
+      btn.textContent = s.total ? `Deep scanning… ${s.done}/${s.total}` : "Deep scanning…";
+      return s.running;
     });
-    if (!anyIssues) {
-      el("tags-deep-results").innerHTML = `<div class="tags-empty">No issues found for the selected checks.</div>`;
-    }
-    loadFacets();
-  } finally {
+  } catch (e) {
     btn.disabled = false;
     btn.textContent = original;
+    el("tags-deep-results").innerHTML = `<div class="tags-empty">${escapeHtml(e.message)}</div>`;
+    return;
   }
+  btn.disabled = false;
+  btn.textContent = original;
+
+  if (status.error) {
+    el("tags-deep-results").innerHTML = `<div class="tags-empty">Deep scan failed: ${escapeHtml(status.error)}</div>`;
+    return;
+  }
+  const data = status.result || {};
+  let anyIssues = false;
+  checks.forEach((key) => {
+    const info = data[key];
+    if (!info || info.count === 0) return;
+    anyIssues = true;
+    renderTagIssueSection(el("tags-deep-results"), key, info);
+  });
+  if (!anyIssues) {
+    el("tags-deep-results").innerHTML = `<div class="tags-empty">No issues found for the selected checks.</div>`;
+  }
+  loadFacets();
 }
 
 el("open-tag-checker").addEventListener("click", () => {
@@ -2284,11 +2333,14 @@ async function scanDuplicates() {
     if (preview.repeat_groups_cleaned) {
       parts.push(`<b>${preview.repeat_groups_cleaned.toLocaleString()}</b> song(s) downloaded twice into the same folder`);
     }
+    if (preview.same_recording_cleaned) {
+      parts.push(`<b>${preview.same_recording_cleaned.toLocaleString()}</b> song(s) with identical copies of the same recording (keeping the better-quality one)`);
+    }
     el("dup-summary").innerHTML =
       `Found ${parts.join(" and ")}.<br>` +
       `Removing them deletes <b>${preview.tracks_to_delete.toLocaleString()}</b> file(s) — one copy of every song stays.` +
       (preview.groups_skipped
-        ? `<br><span class="dup-summary-note">${preview.groups_skipped.toLocaleString()} other duplicate group(s) have no plain album version to compare against, so they're left alone.</span>`
+        ? `<br><span class="dup-summary-note">${preview.groups_skipped.toLocaleString()} other duplicate group(s) couldn't be resolved automatically (no plain version to compare against, or the copies differ enough that they might not be the same recording), so they're left alone.</span>`
         : "");
 
     el("dup-clean-btn").textContent = `Remove ${preview.tracks_to_delete.toLocaleString()} duplicate version(s)`;

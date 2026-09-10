@@ -8,6 +8,7 @@ import re
 import sqlite3
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import mutagen
 from langdetect import detect_langs, DetectorFactory, LangDetectException
@@ -21,6 +22,18 @@ DEFAULT_DB_PATH = os.path.join(jukebox_config.get_app_data_dir(), "library.db")
 DB_PATH = os.environ.get("JUKEBOX_DB_PATH", DEFAULT_DB_PATH)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 EXTS = (".mp3", ".flac", ".m4a", ".wav", ".ogg")
+SCAN_WORKERS = 8  # tag reads are I/O-bound (open + parse a header), not CPU-bound
+
+
+def _is_real_audio_file(fname):
+    """False for AppleDouble sidecar files (macOS writes a "._Song.mp3"
+    next to every "Song.mp3" on any non-HFS/APFS filesystem -- FAT32/exFAT
+    drives, network shares -- to hold the resource fork/xattrs it can't
+    store natively). These match EXTS just like the real file, but aren't
+    audio at all -- mutagen fails to parse them (logged as "could not
+    read"), which was previously just silent wasted work and log noise on
+    every scan of a drive with any of these on it."""
+    return not fname.startswith("._")
 
 YEAR_RE = re.compile(r"(\d{4})")
 
@@ -169,9 +182,15 @@ def scan(progress_cb=None):
     existing_paths = {row[0] for row in cur.fetchall()}
     seen_paths = set()
 
-    total = 0
-    for _root, _dirs, files in os.walk(MUSIC_DIR):
-        total += sum(1 for f in files if os.path.splitext(f)[1].lower() in EXTS)
+    candidates = []  # (fpath, rel, root, fname)
+    for root, _dirs, files in os.walk(MUSIC_DIR):
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in EXTS or not _is_real_audio_file(fname):
+                continue
+            fpath = os.path.join(root, fname)
+            candidates.append((fpath, os.path.relpath(fpath, MUSIC_DIR), root, fname))
+    total = len(candidates)
 
     inserted = 0
     updated = 0
@@ -179,64 +198,87 @@ def scan(progress_cb=None):
     done = 0
     t0 = time.time()
 
-    for root, _dirs, files in os.walk(MUSIC_DIR):
-        for fname in files:
-            ext = os.path.splitext(fname)[1].lower()
-            if ext not in EXTS:
-                continue
-            fpath = os.path.join(root, fname)
-            rel = os.path.relpath(fpath, MUSIC_DIR)
+    def _extract(candidate):
+        """Runs in a worker thread: opens and parses one file's tags, pure
+        function with no database access -- every actual sqlite write
+        still happens on the main thread below, serialized the same as
+        before. Returns None for a file that couldn't be read (logged
+        here since that's the same for every caller), or a dict of the
+        fields the caller writes to the tracks table."""
+        fpath, rel, root, fname = candidate
+        ext = os.path.splitext(fname)[1].lower()
+        try:
+            audio = mutagen.File(fpath, easy=True)
+        except Exception as e:
+            print(f"  ! could not read {rel}: {e}", file=sys.stderr)
+            return None
+        if audio is None:
+            return None
+
+        tags = dict(audio.tags) if audio.tags else {}
+        artist = first_or_none(tags, "artist") or os.path.basename(root)
+        album = first_or_none(tags, "album")
+        title = first_or_none(tags, "title") or os.path.splitext(fname)[0]
+        # A multi-genre ID3 tag can arrive as a single list item with its
+        # values joined by NUL bytes (e.g. "Pop\x00Rock") rather than as
+        # separate list entries -- split those out before building the
+        # genre fields, or primary_genre ends up as a distinct compound
+        # value per genre combination instead of grouping under "Pop".
+        genre_parts = []
+        for g in tags.get("genre") or []:
+            genre_parts.extend(str(g).split("\x00"))
+        genre_parts = [g.strip() for g in genre_parts if g.strip()]
+        seen_genres = set()
+        genre_parts = [g for g in genre_parts if not (g in seen_genres or seen_genres.add(g))]
+        genre = "; ".join(genre_parts) if genre_parts else None
+        primary_genre = genre_parts[0] if genre_parts else None
+        year = parse_year(tags)
+        decade = (year // 10) * 10 if year else None
+        bpm = parse_bpm(tags)
+        duration = getattr(audio.info, "length", None) if audio.info else None
+        language = detect_language(title, artist, album)
+
+        return {
+            "rel": rel, "ext": ext, "artist": artist, "album": album, "title": title,
+            "genre": genre, "primary_genre": primary_genre, "year": year, "decade": decade,
+            "bpm": bpm, "duration": duration, "language": language,
+        }
+
+    # The actual file open + tag parse is the slow part and fully
+    # independent per file -- a small thread pool overlaps that I/O
+    # instead of doing it strictly one file at a time. Every sqlite write
+    # stays serialized on this one connection/thread either way, same as
+    # before.
+    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+        futures = {pool.submit(_extract, c): c for c in candidates}
+        for future in as_completed(futures):
+            fpath, rel, root, fname = futures[future]
             seen_paths.add(rel)
             done += 1
             if progress_cb and done % 10 == 0:
                 progress_cb(done, total)
 
-            try:
-                audio = mutagen.File(fpath, easy=True)
-            except Exception as e:
-                print(f"  ! could not read {rel}: {e}", file=sys.stderr)
+            fields = future.result()
+            if fields is None:
                 skipped += 1
                 continue
-
-            if audio is None:
-                skipped += 1
-                continue
-
-            tags = dict(audio.tags) if audio.tags else {}
-            artist = first_or_none(tags, "artist") or os.path.basename(root)
-            album = first_or_none(tags, "album")
-            title = first_or_none(tags, "title") or os.path.splitext(fname)[0]
-            # A multi-genre ID3 tag can arrive as a single list item with its
-            # values joined by NUL bytes (e.g. "Pop\x00Rock") rather than as
-            # separate list entries -- split those out before building the
-            # genre fields, or primary_genre ends up as a distinct compound
-            # value per genre combination instead of grouping under "Pop".
-            genre_parts = []
-            for g in tags.get("genre") or []:
-                genre_parts.extend(str(g).split("\x00"))
-            genre_parts = [g.strip() for g in genre_parts if g.strip()]
-            seen_genres = set()
-            genre_parts = [g for g in genre_parts if not (g in seen_genres or seen_genres.add(g))]
-            genre = "; ".join(genre_parts) if genre_parts else None
-            primary_genre = genre_parts[0] if genre_parts else None
-            year = parse_year(tags)
-            decade = (year // 10) * 10 if year else None
-            bpm = parse_bpm(tags)
-            duration = getattr(audio.info, "length", None) if audio.info else None
-            language = detect_language(title, artist, album)
 
             if rel in existing_paths:
                 cur.execute(
                     """UPDATE tracks SET artist=?, album=?, title=?, genre=?, primary_genre=?,
                        year=?, decade=?, bpm=?, duration=?, ext=?, language=? WHERE path=?""",
-                    (artist, album, title, genre, primary_genre, year, decade, bpm, duration, ext, language, rel),
+                    (fields["artist"], fields["album"], fields["title"], fields["genre"],
+                     fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
+                     fields["duration"], fields["ext"], fields["language"], fields["rel"]),
                 )
                 updated += 1
             else:
                 cur.execute(
                     """INSERT INTO tracks (path, artist, album, title, genre, primary_genre,
                        year, decade, bpm, duration, ext, language) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (rel, artist, album, title, genre, primary_genre, year, decade, bpm, duration, ext, language),
+                    (fields["rel"], fields["artist"], fields["album"], fields["title"], fields["genre"],
+                     fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
+                     fields["duration"], fields["ext"], fields["language"]),
                 )
                 inserted += 1
 
