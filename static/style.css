@@ -87,9 +87,18 @@ html, body {
   text-transform: uppercase;
 }
 
-.search-wrap { position: relative; flex: 1; max-width: 480px; }
+/* min-width here (not just on the parent .topbar-search-group) is the
+   actual fix for the search box collapsing to a near-invisible sliver at
+   moderate window widths: a flex item's default min-width is auto (its
+   content size), not 0, but an <input> has essentially no intrinsic
+   content width to fall back on, so without an explicit floor it was the
+   first thing in the row to give up space to its non-shrinking siblings
+   (the track count / folder path text) once the window got tight. */
+.search-wrap { position: relative; flex: 1; min-width: 140px; max-width: 480px; }
 .search {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 8px 12px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -221,6 +230,16 @@ html, body {
 .theme-select:hover { background: var(--bg-hover); }
 .theme-select:focus { outline: none; border-color: var(--accent); }
 
+.select-with-swatch { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.color-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.25);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.2);
+  flex-shrink: 0;
+}
+
 .sidebar {
   width: 240px;
   flex-shrink: 0;
@@ -330,7 +349,12 @@ button {
 
 .track-row {
   display: grid;
-  grid-template-columns: 20px 36px 28px 1fr 1fr 90px 70px 60px 32px 40px 32px;
+  /* Title runs longer than artist on average ("Tearin' up My Heart (Radio
+     Edit)" vs "*NSYNC") -- giving it 2fr instead of an even 1fr/1fr split
+     meaningfully cuts how often it truncates, especially in the themed
+     modes (Vinyl/Hi-Fi/Cassette) where the decorative side panel already
+     leaves less room for the list than Default/Graphite. */
+  grid-template-columns: 20px 36px 28px 2fr 1fr 90px 70px 60px 32px 40px 32px;
   gap: 10px;
   align-items: center;
   padding: 6px 10px;
@@ -376,6 +400,21 @@ button {
 .selection-toolbar #selection-count { font-size: 13px; font-weight: 600; margin-right: auto; }
 
 .load-sentinel { display: flex; justify-content: center; align-items: center; padding: 18px 0; color: var(--text-dim); font-size: 12px; min-height: 20px; }
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 80px 20px;
+  text-align: center;
+  color: var(--text-dim);
+}
+.empty-state-icon { font-size: 40px; opacity: .5; margin-bottom: 4px; }
+.empty-state-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.empty-state-hint { font-size: 13px; }
+.empty-state .btn-small { margin-top: 8px; }
 
 .playlist-view-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .playlist-view-header h2 { margin: 0; font-size: 16px; flex: 1; }
@@ -812,6 +851,14 @@ body[data-theme="graphite"] .modal { box-shadow: 2px 2px 10px rgba(0,0,0,.6); }
 .theme-stage {
   position: relative;
   width: 286px;
+  /* Caps each theme's decorative panel relative to the viewport instead
+     of only its own fixed px width -- at a comfortable desktop width
+     (roughly 1200px+ here) this is a no-op, the panel renders at its
+     normal designed size same as always, but on a narrower window it
+     gives room back to the actual track list instead of squeezing the
+     title/artist columns down to an unreadable sliver while the
+     decorative panel keeps its full fixed size regardless. */
+  max-width: 24vw;
   flex-shrink: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1127,7 +1174,7 @@ body[data-theme="cassette"] {
 }
 /* Cassette shells are landscape -- give the sidebar extra width so the tape
    isn't squeezed into the narrower portrait column the other themes use. */
-body[data-theme="cassette"] .theme-stage { width: 470px; }
+body[data-theme="cassette"] .theme-stage { width: 470px; max-width: 32vw; }
 #stage-cassette .cassette-shell {
   position: relative;
   padding: 19px 24px;
@@ -1348,7 +1395,7 @@ body[data-theme="vinyl"][data-wood="mahogany"] { --wood-grain: var(--wood-grain-
    Track/Vol fader rail don't both fit inside the housing's padded content
    box, so the rail spills past the housing's right edge onto the flat
    panel behind it instead of sitting inside the device. */
-body[data-theme="vinyl"] .theme-stage { width: 680px; }
+body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
 /* Flat fill matching the theme's own elevated-panel tone -- no pattern, so
    the turntable housing (with its real wood-grain texture, below) is the
    only textured surface in the stage instead of competing with a second

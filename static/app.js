@@ -177,9 +177,28 @@ async function loadTracks(reset = false) {
     renderTrackList(el("track-list"), data.tracks, { showAdd: true, append: true });
     state.offset += data.tracks.length;
     state.hasMore = state.offset < state.total;
-    el("load-sentinel").textContent = state.hasMore
-      ? ""
-      : (state.total ? `${state.total.toLocaleString()} tracks — end of list` : "No tracks found");
+    if (state.total === 0 && state.offset === 0) {
+      // A search/filter combo that matches nothing is a state real users
+      // hit often (a typo, an over-narrow filter) -- bare centered text
+      // in an otherwise blank canvas read as broken/unfinished rather
+      // than "nothing matched", with no way forward from the message
+      // itself. A search or filter is active whenever this fires (an
+      // actually-empty library fails the choose-folder flow before ever
+      // reaching this screen), so the suggestion is always relevant.
+      el("track-list").innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">🔍</div>
+          <div class="empty-state-title">No tracks found</div>
+          <div class="empty-state-hint">Nothing matches your current search and filters.</div>
+          <button id="empty-state-clear" class="btn-small">Clear search &amp; filters</button>
+        </div>`;
+      el("empty-state-clear").addEventListener("click", clearAllFilters);
+      el("load-sentinel").textContent = "";
+    } else {
+      el("load-sentinel").textContent = state.hasMore
+        ? ""
+        : (state.total ? `${state.total.toLocaleString()} tracks — end of list` : "");
+    }
     el("select-all-filtered").title = `Select every track matching the current filters (${state.total.toLocaleString()})`;
     el("select-all-filtered").disabled = state.total === 0;
   } finally {
@@ -246,9 +265,9 @@ function renderTrackList(container, list, { showAdd, append } = {}) {
       <div class="col-check"><input type="checkbox" ${state.selected.has(t.id) ? "checked" : ""}></div>
       <div class="col-art"><img loading="lazy" src="${artUrl(t.id)}" alt="" onerror="this.remove()"></div>
       <div class="col-idx">${baseIdx + i + 1}</div>
-      <div class="col-title">${escapeHtml(t.title || "")}</div>
-      <div class="col-artist">${escapeHtml(t.artist || "")}</div>
-      <div class="col-genre">${escapeHtml(t.primary_genre || "")}</div>
+      <div class="col-title" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "")}</div>
+      <div class="col-artist" title="${escapeHtml(t.artist || "")}">${escapeHtml(t.artist || "")}</div>
+      <div class="col-genre" title="${escapeHtml(t.primary_genre || "")}">${escapeHtml(t.primary_genre || "")}</div>
       <div class="col-year">${t.year || ""}</div>
       <div class="col-rating row-stars">${rowStarsHtml(t.rating || 0)}</div>
       <div class="col-queue" title="Play next">▸</div>
@@ -711,9 +730,9 @@ function applyTheme(name) {
   }
   el("focus-mode-btn").classList.toggle("hidden", !THEME_PANELS[name]);
   el("popout-btn").classList.toggle("hidden", !THEME_PANELS[name] || !("documentPictureInPicture" in window));
-  el("wood-select").classList.toggle("hidden", name !== "vinyl");
-  el("cassette-design-select").classList.toggle("hidden", name !== "cassette");
-  el("vu-color-select").classList.toggle("hidden", name !== "hifi");
+  el("wood-select-wrap").classList.toggle("hidden", name !== "vinyl");
+  el("cassette-design-select-wrap").classList.toggle("hidden", name !== "cassette");
+  el("vu-color-select-wrap").classList.toggle("hidden", name !== "hifi");
   if (state.currentTrack) themeOnTrackChange(state.currentTrack);
   syncThemeVisuals();
   fitStagePanel();
@@ -724,6 +743,17 @@ el("theme-select").addEventListener("change", () => applyTheme(el("theme-select"
 // The vinyl theme's turntable wood finish -- a separate, theme-scoped
 // choice (see applyTheme above, which shows/hides this select) rather than
 // a whole extra theme, since only the housing texture changes.
+// Actual solid colors pulled from each option's own theming rule in
+// style.css (the wood grain's base flood-color, the cassette band's SVG
+// fill, the VU face gradient's accent) -- lets the picker show a real
+// preview swatch instead of asking people to choose blind from a name
+// like "Rust on Bone" in a native <select>, which can't render per-option
+// color chips consistently across the WebKit/WebView2/WebKit2GTK
+// backends this app runs in across platforms.
+const WOOD_SWATCH_COLORS = { walnut: "#3a2a1c", ebony: "#241c15", mahogany: "#402019" };
+const CASSETTE_SWATCH_COLORS = { blue: "#a9d4de", red: "#b5482f", rust: "#9c4a34" };
+const VU_SWATCH_COLORS = { amber: "#e8961f", blue: "#3fa9e8", green: "#3ecf6e" };
+
 function applyWoodFinish(name) {
   state.woodFinish = name;
   try { localStorage.setItem("jukebox-wood-finish", name); } catch (e) { /* private browsing etc -- fine to skip */ }
@@ -731,6 +761,7 @@ function applyWoodFinish(name) {
   document.body.dataset.wood = name;
   if (pipWindow) pipWindow.document.body.dataset.wood = name;
   el("wood-select").value = name;
+  el("wood-select-swatch").style.background = WOOD_SWATCH_COLORS[name] || "transparent";
 }
 
 el("wood-select").addEventListener("change", () => applyWoodFinish(el("wood-select").value));
@@ -746,6 +777,7 @@ function applyCassetteDesign(name) {
   document.body.dataset.cassetteDesign = name;
   if (pipWindow) pipWindow.document.body.dataset.cassetteDesign = name;
   el("cassette-design-select").value = name;
+  el("cassette-design-select-swatch").style.background = CASSETTE_SWATCH_COLORS[name] || "transparent";
 }
 
 el("cassette-design-select").addEventListener("change", () => applyCassetteDesign(el("cassette-design-select").value));
@@ -761,6 +793,7 @@ function applyVuColor(name) {
   document.body.dataset.vuColor = name;
   if (pipWindow) pipWindow.document.body.dataset.vuColor = name;
   el("vu-color-select").value = name;
+  el("vu-color-select-swatch").style.background = VU_SWATCH_COLORS[name] || "transparent";
 }
 
 el("vu-color-select").addEventListener("change", () => applyVuColor(el("vu-color-select").value));
@@ -1518,7 +1551,7 @@ el("filter-rating").addEventListener("change", (e) => {
   loadTracks(true);
 });
 el("sort").addEventListener("change", (e) => { state.sort = e.target.value; loadTracks(true); });
-el("clear-filters").addEventListener("click", () => {
+function clearAllFilters() {
   state.q = ""; state.genre = ""; state.decade = ""; state.language = ""; state.artist = ""; state.ratedOnly = false; state.rating = ""; state.sort = "artist";
   el("search").value = "";
   Array.from(el("filter-genre").options).forEach((o) => { o.selected = false; });
@@ -1527,7 +1560,8 @@ el("clear-filters").addEventListener("click", () => {
   el("filter-rating").value = ""; el("sort").value = "artist";
   updateDeleteRatedVisibility();
   loadTracks(true);
-});
+}
+el("clear-filters").addEventListener("click", clearAllFilters);
 
 // The bulk-delete action is scoped tightly to the "exactly 1 star" filter --
 // it never appears for any other rating so there's no risk of it acting on
@@ -1618,13 +1652,40 @@ el("new-playlist").addEventListener("click", () => {
   });
 });
 
+// Playlist pickers (this one and the Convert flow's below) just listed
+// every playlist with no way to narrow it down -- fine with a handful,
+// but it's a long undifferentiated scroll once there are many (each one
+// showing 0 tracks or not is no help either, since an empty playlist
+// looks identical to a real one in the list). A filter box earns its
+// keep past a small count; below that it's just one more control for no
+// reason, so it's only added when it'd actually help.
+const PLAYLIST_FILTER_THRESHOLD = 6;
+
+function playlistFilterInputHtml(inputId) {
+  return `<input type="text" id="${inputId}" placeholder="Filter playlists…" style="margin-bottom:8px">`;
+}
+
+function wirePlaylistFilter(inputId, containerId) {
+  const input = el(inputId);
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const q = input.value.trim().toLowerCase();
+    document.querySelectorAll(`#${containerId} .modal-list-item`).forEach((item) => {
+      const name = (item.querySelector("span")?.textContent || "").toLowerCase();
+      item.classList.toggle("hidden", !!q && !name.includes(q));
+    });
+  });
+}
+
 async function openAddToPlaylistModal(trackIds) {
   const playlists = await api("/playlists");
   const label = trackIds.length > 1 ? `Add to playlist` : `Add to playlist`;
   const countNote = trackIds.length > 1
     ? `<p style="color:var(--text-dim);font-size:12px;margin:0 0 12px">${trackIds.length} tracks selected</p>`
     : "";
-  let body = countNote + `<div id="modal-playlist-picker">`;
+  let body = countNote;
+  if (playlists.length > PLAYLIST_FILTER_THRESHOLD) body += playlistFilterInputHtml("modal-playlist-filter");
+  body += `<div id="modal-playlist-picker">`;
   if (playlists.length === 0) {
     body += `<p style="color:var(--text-dim)">No playlists yet — create one below.</p>`;
   } else {
@@ -1648,6 +1709,7 @@ async function openAddToPlaylistModal(trackIds) {
     }
     closeModal();
   });
+  wirePlaylistFilter("modal-playlist-filter", "modal-playlist-picker");
   document.querySelectorAll("#modal-playlist-picker .modal-list-item").forEach((item) => {
     item.addEventListener("click", async () => {
       await api(`/playlists/${item.dataset.id}/tracks`, {
@@ -1808,7 +1870,9 @@ el("convert-menu").addEventListener("click", async () => {
   const playlists = await api("/playlists");
   let body = `<p style="color:var(--text-dim);font-size:12px;margin:0 0 12px">
     Check tracks in the list first to convert a specific selection, or pick a whole playlist below.
-  </p><div id="convert-source-picker">`;
+  </p>`;
+  if (playlists.length > PLAYLIST_FILTER_THRESHOLD) body += playlistFilterInputHtml("convert-source-filter");
+  body += `<div id="convert-source-picker">`;
   if (playlists.length === 0) {
     body += `<p style="color:var(--text-dim)">No playlists yet — select some tracks instead.</p>`;
   } else {
@@ -1818,6 +1882,7 @@ el("convert-menu").addEventListener("click", async () => {
   }
   body += `</div>`;
   openModal("Convert — choose what", body, () => {});
+  wirePlaylistFilter("convert-source-filter", "convert-source-picker");
   document.querySelectorAll("#convert-source-picker .modal-list-item").forEach((item) => {
     item.addEventListener("click", () => {
       closeModal();
@@ -1868,13 +1933,17 @@ el("modal-ok").addEventListener("click", () => { if (modalOkHandler) modalOkHand
 el("modal-backdrop").addEventListener("click", (e) => { if (e.target.id === "modal-backdrop") closeModal(); });
 
 // --------------------------------------------------------------- rescan --
-el("rescan-library").addEventListener("click", async () => {
+async function runRescan(forcePrune = false) {
   const btn = el("rescan-library");
   const original = getTileText(btn);
   setTileText(btn, "Scanning…");
   btn.disabled = true;
   try {
-    const started = await api("/rescan", { method: "POST" });
+    const started = await api("/rescan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_prune: forcePrune }),
+    });
     if (!started.started) {
       alert(started.error === "Already running" ? "A scan is already running." : (started.error || "Couldn't start the scan."));
       setTileText(btn, original);
@@ -1898,13 +1967,23 @@ el("rescan-library").addEventListener("click", async () => {
     const stats = status.result || {};
     setTileText(btn, `+${stats.inserted || 0} / -${stats.removed || 0}`);
     setTimeout(() => { setTileText(btn, original); }, 3000);
+    // The scan deliberately refuses to auto-remove more than ~20% of the
+    // index in one pass (a sleeping/disconnected drive could otherwise
+    // look like a mass deletion) -- surface that instead of silently
+    // saying nothing, with a one-click way to confirm it's expected.
+    if (stats.warning) {
+      if (confirm(`${stats.warning}\n\nForce cleanup now anyway?`)) {
+        await runRescan(true);
+      }
+    }
   } catch (e) {
     setTileText(btn, "Failed");
     setTimeout(() => { setTileText(btn, original); }, 3000);
   } finally {
     btn.disabled = false;
   }
-});
+}
+el("rescan-library").addEventListener("click", () => runRescan(false));
 
 // -------------------------------------------------------------- tag checker --
 // Missing genre/album/year are unambiguous straight from the DB (NULL/empty
@@ -2459,7 +2538,7 @@ function renderDupReviewGroup(group) {
         <div class="dup-review-track-title">${escapeHtml(t.title || "")}</div>
         <div class="dup-review-track-meta">${escapeHtml(dupReviewTrackMeta(t))}</div>
       </div>
-      <button class="btn-small dup-review-delete-btn">🗑 Delete this file</button>
+      <button class="btn-small danger-btn dup-review-delete-btn">🗑 Delete this file</button>
     `;
     const checkbox = row.querySelector(".dup-review-track-check");
     checkbox.addEventListener("change", () => {

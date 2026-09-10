@@ -42,21 +42,30 @@
           <option value="cassette">Cassette</option>
           <option value="vinyl">Vinyl</option>
         </select>
-        <select id="wood-select" class="theme-select hidden" title="Turntable wood finish">
-          <option value="walnut">Walnut</option>
-          <option value="ebony">Ebony Oak</option>
-          <option value="mahogany">Mahogany</option>
-        </select>
-        <select id="cassette-design-select" class="theme-select hidden" title="Cassette shell design">
-          <option value="blue">Sky Blue Ribbon</option>
-          <option value="red">Brick Red Ribbon</option>
-          <option value="rust">Rust on Bone</option>
-        </select>
-        <select id="vu-color-select" class="theme-select hidden" title="VU meter lighting">
-          <option value="amber">Amber</option>
-          <option value="blue">Blue</option>
-          <option value="green">Green</option>
-        </select>
+        <span id="wood-select-wrap" class="select-with-swatch hidden">
+          <span id="wood-select-swatch" class="color-swatch" aria-hidden="true"></span>
+          <select id="wood-select" class="theme-select" title="Turntable wood finish">
+            <option value="walnut">Walnut</option>
+            <option value="ebony">Ebony Oak</option>
+            <option value="mahogany">Mahogany</option>
+          </select>
+        </span>
+        <span id="cassette-design-select-wrap" class="select-with-swatch hidden">
+          <span id="cassette-design-select-swatch" class="color-swatch" aria-hidden="true"></span>
+          <select id="cassette-design-select" class="theme-select" title="Cassette shell design">
+            <option value="blue">Sky Blue Ribbon</option>
+            <option value="red">Brick Red Ribbon</option>
+            <option value="rust">Rust on Bone</option>
+          </select>
+        </span>
+        <span id="vu-color-select-wrap" class="select-with-swatch hidden">
+          <span id="vu-color-select-swatch" class="color-swatch" aria-hidden="true"></span>
+          <select id="vu-color-select" class="theme-select" title="VU meter lighting">
+            <option value="amber">Amber</option>
+            <option value="blue">Blue</option>
+            <option value="green">Green</option>
+          </select>
+        </span>
         <button id="focus-mode-btn" class="btn-icon stage-toolbtn hidden" title="Focus mode — hide everything but the player">⤢</button>
         <button id="popout-btn" class="btn-icon stage-toolbtn hidden" title="Pop out as a floating player">⧉</button>
       </div>
@@ -566,7 +575,7 @@
     <div id="dup-review-bulk-bar" class="dup-review-bulk-bar hidden">
       <span id="dup-review-selected-count"></span>
       <button id="dup-review-select-none" class="btn-small">Clear selection</button>
-      <button id="dup-review-delete-selected" class="btn-primary btn-small">Delete selected</button>
+      <button id="dup-review-delete-selected" class="danger-btn btn-small">Delete selected</button>
     </div>
     <div class="dup-body">
       <p class="dup-summary-text">
