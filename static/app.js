@@ -1055,6 +1055,96 @@ function updateVinylTonearm() {
   tonearm.style.transform = `rotate(${straightAngle + ARM_BEND_OFFSET_DEG}deg)`;
 }
 
+// Drag-to-seek: the reverse of updateVinylTonearm's radius-from-progress
+// math above. There, a known progress picks a target radius, which is
+// solved into a rotation angle. Here, the pointer's direction from the
+// pivot is what's known -- projecting it out to the arm's own fixed
+// length (a rigid rod, always exactly ARM_EFFECTIVE_LEN from the pivot,
+// whichever way it's pointed) gives the tip position that direction
+// would put it at, and that tip's distance from the disc center is
+// exactly the "target radius" updateVinylTonearm would have started
+// from, so it inverts cleanly back to a progress fraction.
+function seekFromTonearmPointer(clientX, clientY) {
+  const tonearm = el("tonearm");
+  const disc = el("vinyl-disc");
+  if (!tonearm || !disc || !audio.src || !isFinite(audio.duration) || !audio.duration) return;
+
+  // getBoundingClientRect() alone doesn't match updateVinylTonearm's own
+  // geometry: the disc can render at a different size than its layout
+  // box via a CSS scale transform (fitStagePanel fits the stage to
+  // whatever container size it's actually in), same reasoning as that
+  // function's own offsetLeft/Top/Width use -- ARM_EFFECTIVE_LEN and the
+  // rest of this arm's dimensions are authored against the *unscaled*
+  // layout box, so a real pointer position (necessarily post-transform,
+  // there's no other way to receive one) has to be converted back into
+  // that same unscaled space before any of this geometry lines up with
+  // it, or the arm answers a systematically wrong radius for wherever
+  // it's actually pointed.
+  const discRect = disc.getBoundingClientRect();
+  const discScale = disc.offsetWidth ? (discRect.width / disc.offsetWidth) : 1;
+
+  const parent = tonearm.offsetParent;
+  const parentRect = parent ? parent.getBoundingClientRect() : { left: 0, top: 0 };
+  const pivotX = parentRect.left + tonearm.offsetLeft + tonearm.offsetWidth / 2;
+  const pivotY = parentRect.top + tonearm.offsetTop + tonearm.offsetHeight / 2;
+  const discCenterX = parentRect.left + disc.offsetLeft + disc.offsetWidth / 2;
+  const discCenterY = parentRect.top + disc.offsetTop + disc.offsetHeight / 2;
+  const discRadius = disc.offsetWidth / 2;
+
+  // Undoes the disc's own render-time scale around its center, so this
+  // lands in the same unscaled space as pivotX/Y and discCenterX/Y above.
+  const mouseX = discCenterX + (clientX - discCenterX) / discScale;
+  const mouseY = discCenterY + (clientY - discCenterY) / discScale;
+
+  const d = Math.hypot(discCenterX - pivotX, discCenterY - pivotY);
+  if (!d) return;
+
+  const rMin = Math.abs(ARM_EFFECTIVE_LEN - d) + 4;
+  const rMax = ARM_EFFECTIVE_LEN + d - 4;
+  const outerR = Math.min(rMax, discRadius * 0.98);
+  const innerR = Math.max(rMin, Math.min(outerR, discRadius * 0.05));
+
+  const dx = mouseX - pivotX, dy = mouseY - pivotY;
+  const dist = Math.hypot(dx, dy);
+  if (!dist) return;
+  const tipX = pivotX + (dx / dist) * ARM_EFFECTIVE_LEN;
+  const tipY = pivotY + (dy / dist) * ARM_EFFECTIVE_LEN;
+  const targetR = Math.hypot(tipX - discCenterX, tipY - discCenterY);
+
+  const clampedR = Math.max(innerR, Math.min(outerR, targetR));
+  const progress = Math.max(0, Math.min(1, (clampedR - outerR) / (innerR - outerR)));
+
+  audio.currentTime = progress * audio.duration;
+  updateVinylTonearm();
+}
+
+let tonearmDragging = false;
+function initTonearmDrag() {
+  const tonearm = el("tonearm");
+  if (!tonearm) return;
+  tonearm.addEventListener("pointerdown", (e) => {
+    if (!audio.src) return;
+    tonearmDragging = true;
+    tonearm.classList.add("dragging");
+    tonearm.setPointerCapture(e.pointerId);
+    seekFromTonearmPointer(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+  tonearm.addEventListener("pointermove", (e) => {
+    if (!tonearmDragging) return;
+    seekFromTonearmPointer(e.clientX, e.clientY);
+  });
+  const endDrag = (e) => {
+    if (!tonearmDragging) return;
+    tonearmDragging = false;
+    tonearm.classList.remove("dragging");
+    try { tonearm.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+  };
+  tonearm.addEventListener("pointerup", endDrag);
+  tonearm.addEventListener("pointercancel", endDrag);
+}
+initTonearmDrag();
+
 // Driven by rAF rather than the audio "timeupdate" event, same as the VU
 // meters and cassette reels below -- timeupdate's firing rate isn't
 // specified and isn't reliably frequent (observed as slow enough in

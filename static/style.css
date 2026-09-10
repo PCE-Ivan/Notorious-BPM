@@ -1539,12 +1539,32 @@ body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
   transition: transform .35s cubic-bezier(.4,0,.2,1);
   z-index: 2;
 }
+/* Dragging sets the rotation directly every pointermove -- the transition
+   above (meant for the normal auto-advancing sweep) would otherwise make
+   the arm visibly lag half a second behind the cursor instead of tracking
+   it, the opposite of what a drag should feel like. */
+#stage-vinyl .tonearm.dragging { transition: none; }
 #stage-vinyl .tonearm-base {
   position: absolute; left: 0; top: 0; width: 46px; height: 46px;
   margin: -23px 0 0 -23px; border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, #eef0f2, #9199a1 55%, #565b61);
   border: 1px solid #3a3d42;
   box-shadow: 0 2px 5px rgba(0,0,0,.5), inset 0 1px 1px rgba(255,255,255,.3);
+}
+/* The base, and both rigid segments, are the actual grabbable area (the
+   .tonearm element itself is a zero-size positioning anchor) -- cursor
+   affordance plus a little glow on hover is what signals "this moves"
+   for a UI element with no scrollbar/handle chrome. */
+#stage-vinyl .tonearm-base,
+#stage-vinyl .tonearm-seg1,
+#stage-vinyl .tonearm-seg2 {
+  cursor: grab;
+}
+#stage-vinyl .tonearm:hover .tonearm-base { box-shadow: 0 2px 5px rgba(0,0,0,.5), inset 0 1px 1px rgba(255,255,255,.3), 0 0 0 3px var(--accent-dim); }
+#stage-vinyl .tonearm.dragging .tonearm-base,
+#stage-vinyl .tonearm.dragging .tonearm-seg1,
+#stage-vinyl .tonearm.dragging .tonearm-seg2 {
+  cursor: grabbing;
 }
 #stage-vinyl .tonearm-base::after {
   content: ""; position: absolute; left: 50%; top: 50%; width: 15px; height: 15px;
