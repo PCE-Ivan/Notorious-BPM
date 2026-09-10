@@ -455,19 +455,35 @@ const vuAudio = new Audio();
 // which doesn't have that problem on any engine tested so far.
 vuAudio.muted = false;
 vuAudio.preload = "none";
-// Mirrors whatever `audio` is doing via its own standard events, so every
-// existing play/pause/seek call site (togglePlayPause, the keyboard
-// shortcuts, MediaSession's handlers, ...) stays in sync automatically --
-// nothing else needs to know this mirror exists.
-audio.addEventListener("play", () => {
+// Mirrors `audio` only when something actually taps its output -- the
+// Hi-Fi/Cassette VU meters, via ensureAudioGraph's createMediaElementSource
+// (see there for why vuAudio has to be unmuted to work at all). Every other
+// theme, and radio under ANY theme (which reads levels from the server
+// instead -- see vuLoop), never calls ensureAudioGraph, so this element is
+// never claimed by Web Audio and never silenced by it. Starting it anyway
+// in that case would just be a second, independently-buffered copy of the
+// exact same audio playing straight out the speakers alongside the real
+// one -- two live-stream connections in particular drift out of sync
+// within seconds, which is what "the radio sounds like echo" turned out to
+// be (the same double-playback affects any theme other than Hi-Fi/
+// Cassette, just less audibly for a fully-buffered local file).
+// Called from syncThemeVisuals(), which already runs on every play/pause
+// and theme change -- so switching themes mid-playback starts or stops
+// this mirror exactly when the VU meters start or stop needing it.
+function syncVuAudioMirror() {
+  const isRadio = !!(state.currentTrack && state.currentTrack.isRadio);
+  const needed = (state.theme === "hifi" || state.theme === "cassette") && !isRadio && !audio.paused && audio.src;
+  if (!needed) {
+    if (!vuAudio.paused) vuAudio.pause();
+    return;
+  }
   if (vuAudio.src !== audio.currentSrc) vuAudio.src = audio.currentSrc;
   // Only meaningful for a finite, seekable file -- a live radio stream
   // reports duration=Infinity and isn't seekable at all, so this would be
   // asking vuAudio to seek to an arbitrary, unreachable position.
   if (isFinite(audio.duration)) vuAudio.currentTime = audio.currentTime;
   vuAudio.play().catch(() => {});
-});
-audio.addEventListener("pause", () => vuAudio.pause());
+}
 audio.addEventListener("seeked", () => {
   if (isFinite(audio.duration)) vuAudio.currentTime = audio.currentTime;
 });
@@ -1209,6 +1225,8 @@ function startVinylTonearmLoopIfNeeded() {
 
 function syncThemeVisuals() {
   const playing = !audio.paused && !!audio.src;
+
+  syncVuAudioMirror();
 
   // The disc's rotation itself is advanced by vinylTonearmLoop (started
   // below when playing); nothing to do here when paused -- the loop's own
