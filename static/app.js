@@ -1035,11 +1035,16 @@ function updateVinylTonearm() {
   const tonearm = el("tonearm");
   const disc = el("vinyl-disc");
   if (!tonearm || !disc) return;
-  if (!audio.src || !isFinite(audio.duration) || !audio.duration) {
+  const isRadio = !!(state.currentTrack && state.currentTrack.isRadio);
+  if (!audio.src || (!isRadio && (!isFinite(audio.duration) || !audio.duration))) {
     tonearm.style.transform = `rotate(${TONEARM_REST_DEG}deg)`;
     return;
   }
-  const progress = Math.max(0, Math.min(1, audio.currentTime / audio.duration));
+  // A live stream has no seekable duration to derive a real position from
+  // -- audio.duration stays Infinity/NaN for as long as it plays. Rest at
+  // a fixed point midway across the record instead of parking off the
+  // disc entirely, so the panel actually looks like something's playing.
+  const progress = isRadio ? 0.5 : Math.max(0, Math.min(1, audio.currentTime / audio.duration));
 
   // Measured from the live layout on every call (offsetLeft/Top/Width
   // reflect pre-transform position, unaffected by the disc's own spin
