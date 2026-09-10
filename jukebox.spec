@@ -18,6 +18,8 @@ block_cipher = None
 datas = [("static", "static")]
 datas += collect_data_files("langdetect")
 datas += collect_data_files("webview")
+if os.path.isfile("runtimeconfig.json"):
+    datas.append(("runtimeconfig.json", "."))
 
 icon_path = "icon.ico" if os.path.isfile("icon.ico") else None
 

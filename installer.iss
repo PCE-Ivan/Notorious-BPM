@@ -28,7 +28,14 @@ OutputDir=installer_output
 OutputBaseFilename=NotoriousBPMSetup
 Compression=lzma2
 SolidCompression=yes
-ArchitecturesInstallIn64BitMode=x64compatible
+; PyInstaller produces a native-architecture build (whatever CPU the
+; machine running PyInstaller has) -- there's no cross-compiling to a
+; different architecture. This installer.iss, as configured, targets the
+; ARM64 build actually made and tested (see BUILD_WINDOWS.md); an x86/x64
+; build needs its own separate build+install cycle on an x86/x64 machine,
+; with this line changed to "x64compatible" for that build instead.
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
 WizardStyle=modern
 DisableProgramGroupPage=yes
 ; Per-user install by default -- no admin prompt needed, and the app's own

@@ -5,6 +5,9 @@ library-*.db
 config.json
 
 # Build artifacts (regenerate with build_macos.sh / pyinstaller *.spec)
+# icon.ico: BUILD_WINDOWS.md's own copy-AppIcon.ico-here-before-building
+# step -- a duplicate of assets/AppIcon.ico kept out of git on purpose.
+icon.ico
 dist/
 dist-macos/
 dist-macos-new/

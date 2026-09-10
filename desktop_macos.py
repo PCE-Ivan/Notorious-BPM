@@ -126,14 +126,24 @@ class JsApi:
     letterbox margins on whichever axis doesn't match."""
 
     def __init__(self):
-        self.window = None
+        # Underscore-prefixed deliberately: pywebview's JS-API exposure
+        # walker (inject_pywebview -> get_functions in its util.py) uses
+        # dir(self._js_api) to auto-discover what to expose to the page,
+        # skipping anything whose name starts with "_" but otherwise
+        # recursing into any non-callable attribute. A plain "self.window"
+        # here gets walked straight into the native OS window object,
+        # which on Windows recurses infinitely into .NET's Rectangle.Empty
+        # and freezes the app (JB-011) -- kept underscore-prefixed here
+        # too so this class stays identical across all three platform
+        # launchers rather than only fixing it where it was caught.
+        self._window = None
         self._normal_size = None
 
     def enter_focus(self, natural_size=None):
-        if not self.window:
+        if not self._window:
             return
         if self._normal_size is None:
-            self._normal_size = (self.window.width, self.window.height)
+            self._normal_size = (self._window.width, self._window.height)
         target = FOCUS_SIZE
         if natural_size and natural_size.get("width") and natural_size.get("height"):
             w, h = natural_size["width"], natural_size["height"]
@@ -144,12 +154,12 @@ class JsApi:
             scale = max(1.0, FOCUS_MIN[0] / w, FOCUS_MIN[1] / h)
             scale = min(scale, FOCUS_MAX[0] / w, FOCUS_MAX[1] / h)
             target = (round(w * scale), round(h * scale))
-        self.window.resize(*target)
+        self._window.resize(*target)
 
     def exit_focus(self):
-        if not self.window or self._normal_size is None:
+        if not self._window or self._normal_size is None:
             return
-        self.window.resize(*self._normal_size)
+        self._window.resize(*self._normal_size)
 
     def save_export(self, content):
         """Backs the "Backup" button's actual file save. A plain
@@ -218,7 +228,7 @@ def main():
         "Notorious B.P.M.", f"http://127.0.0.1:{PORT}", width=1200, height=800, min_size=(800, 500),
         maximized=True, js_api=api,
     )
-    api.window = window
+    api._window = window
     window.events.closing += _auto_backup_on_close
     # private_mode=False: pywebview defaults to a private/incognito-style
     # WKWebView, which doesn't persist storage across launches -- this was

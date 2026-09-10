@@ -127,26 +127,37 @@ class JsApi:
     macOS build's desktop_macos.py -- same app.js, same bridge contract."""
 
     def __init__(self):
-        self.window = None
+        # Underscore-prefixed deliberately: pywebview's JS-API exposure
+        # walker (inject_pywebview -> get_functions in its util.py) uses
+        # dir(self._js_api) to auto-discover what to expose to the page,
+        # skipping anything whose name starts with "_" but otherwise
+        # recursing into any non-callable attribute. A plain "self.window"
+        # here gets walked straight into the native OS window object --
+        # on Windows specifically, that recurses into .NET's
+        # Rectangle.Empty (a value type pythonnet re-boxes as a new
+        # object on every access), and the walker's id()-based
+        # already-visited check can't catch that, so it recurses forever
+        # and freezes the app (JB-011).
+        self._window = None
         self._normal_size = None
 
     def enter_focus(self, natural_size=None):
-        if not self.window:
+        if not self._window:
             return
         if self._normal_size is None:
-            self._normal_size = (self.window.width, self.window.height)
+            self._normal_size = (self._window.width, self._window.height)
         target = FOCUS_SIZE
         if natural_size and natural_size.get("width") and natural_size.get("height"):
             w, h = natural_size["width"], natural_size["height"]
             scale = max(1.0, FOCUS_MIN[0] / w, FOCUS_MIN[1] / h)
             scale = min(scale, FOCUS_MAX[0] / w, FOCUS_MAX[1] / h)
             target = (round(w * scale), round(h * scale))
-        self.window.resize(*target)
+        self._window.resize(*target)
 
     def exit_focus(self):
-        if not self.window or self._normal_size is None:
+        if not self._window or self._normal_size is None:
             return
-        self.window.resize(*self._normal_size)
+        self._window.resize(*self._normal_size)
 
     def save_export(self, content):
         """Backs the "Backup" button's actual file save -- same reasoning
@@ -217,17 +228,47 @@ def _auto_backup_on_close():
         pass
 
 
+def _init_dotnet_runtime():
+    """pywebview's Windows backend hosts WebView2 inside a WinForms window,
+    which needs System.Windows.Forms -- part of the "WindowsDesktop"
+    shared framework, not the bare "NETCore" one. pythonnet's default,
+    implicit CoreCLR load (triggered by pywebview's own `import clr`) only
+    asks for the bare NETCore framework, so System.Windows.Forms fails to
+    load with a "could not find file or assembly" error and pywebview
+    silently falls back to a plain browser tab -- explicitly loading
+    CoreCLR ourselves first, with a runtime config that asks for
+    WindowsDesktop specifically, is what fixes it. Needs the .NET
+    Desktop Runtime installed on the machine (a normal, common thing to
+    already have -- Visual Studio, many games/apps pull it in -- but not
+    guaranteed on a bare-bones install)."""
+    from pythonnet import load
+    config_path = os.path.join(_bundled_base_dir(), "runtimeconfig.json")
+    load("coreclr", runtime_config=config_path)
+    # pywebview's winforms.py only pre-loads System.Windows.Forms itself
+    # before doing `from Microsoft.Win32 import SystemEvents` -- under
+    # classic .NET Framework (what pywebview was written against),
+    # SystemEvents lived inside System.Windows.Forms's own assembly, so
+    # that was enough. Under modern .NET (what WindowsDesktop.App/CoreCLR
+    # actually ships), it was split into its own separate assembly, so it
+    # needs its own explicit reference or that import fails.
+    import clr
+    clr.AddReference("System.Windows.Forms")
+    clr.AddReference("Microsoft.Win32.SystemEvents")
+
+
 def _open_window():
     """Native pywebview window when possible; falls back to a plain browser
     tab if pywebview can't initialize (e.g. WebView2 runtime missing)."""
     try:
+        if sys.platform == "win32":
+            _init_dotnet_runtime()
         import webview
         api = JsApi()
         window = webview.create_window(
             "Notorious B.P.M.", f"http://127.0.0.1:{PORT}", width=1200, height=800, min_size=(800, 500),
             maximized=True, js_api=api,
         )
-        api.window = window
+        api._window = window
         window.events.closing += _auto_backup_on_close
         # private_mode=False: without it, pywebview uses a private/
         # incognito-style browsing context that doesn't persist storage
