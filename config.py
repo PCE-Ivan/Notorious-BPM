@@ -32,7 +32,7 @@ def get_app_data_dir():
     return path
 
 
-CONFIG_PATH = os.path.join(get_app_data_dir(), "config.json")
+CONFIG_PATH = os.environ.get("JUKEBOX_CONFIG_PATH") or os.path.join(get_app_data_dir(), "config.json")
 
 
 def load_config():

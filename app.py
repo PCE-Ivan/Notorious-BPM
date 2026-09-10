@@ -207,6 +207,9 @@ TRACK_FIELDS = (
     "t.decade, t.bpm, t.duration, t.ext, t.language, r.rating as rating"
 )
 
+PLAYLIST_NAME_MAX_LEN = 200
+SMART_PLAYLIST_NAME_MAX_LEN = 200
+
 
 # ---------------------------------------------------------------- browsing --
 
@@ -222,7 +225,7 @@ _scan_state = {"running": False, "done": 0, "total": 0, "result": None, "error":
 _scan_lock = threading.Lock()
 
 
-def _run_scan_bg():
+def _run_scan_bg(force_prune=False):
     def progress_cb(done, total):
         _scan_state["done"] = done
         _scan_state["total"] = total
@@ -231,7 +234,7 @@ def _run_scan_bg():
         import importlib
         import scan_library
         importlib.reload(scan_library)
-        stats = scan_library.scan(progress_cb=progress_cb)
+        stats = scan_library.scan(progress_cb=progress_cb, force_prune=force_prune)
         _scan_state["result"] = stats
     except Exception as e:
         _scan_state["error"] = str(e)
@@ -240,7 +243,7 @@ def _run_scan_bg():
         _invalidate_dup_plan_cache()
 
 
-def _start_scan_bg():
+def _start_scan_bg(force_prune=False):
     """Returns False (and starts nothing) if a scan is already running --
     same "already running" convention as fill-genres/fill-years, not an
     error, just something the caller can tell the user."""
@@ -249,14 +252,15 @@ def _start_scan_bg():
             return False
         _scan_state.update(running=True, done=0, total=0, result=None, error=None)
         close_db(None)
-        threading.Thread(target=_run_scan_bg, daemon=True).start()
+        threading.Thread(target=_run_scan_bg, args=(force_prune,), daemon=True).start()
         return True
 
 
 @app.route("/api/rescan", methods=["POST"])
 def rescan():
     _snapshot_db()
-    started = _start_scan_bg()
+    data = request.get_json(force=True, silent=True) or {}
+    started = _start_scan_bg(force_prune=bool(data.get("force_prune")))
     return jsonify({"started": started, "error": None if started else "Already running"})
 
 
@@ -803,6 +807,19 @@ def get_theme():
     return jsonify({"theme": jukebox_config.load_config().get("theme")})
 
 
+# Kept in sync with static/index.html's <option> lists by hand -- these
+# only change when a new theme/finish/design/color is added to the UI,
+# which already means editing index.html anyway. Rejecting anything else
+# means a bad value (a stray API call, a typo in a future frontend change)
+# can't get saved and silently produce an unstyled/broken UI with no
+# fallback and no error, which is what plain isinstance(str)-only
+# validation allowed before.
+VALID_THEMES = {"default", "graphite", "hifi", "cassette", "vinyl"}
+VALID_WOOD_FINISHES = {"walnut", "ebony", "mahogany"}
+VALID_CASSETTE_DESIGNS = {"blue", "red", "rust"}
+VALID_VU_COLORS = {"amber", "blue", "green"}
+
+
 @app.route("/api/theme", methods=["POST"])
 def set_theme():
     """Saved server-side (not just localStorage) so the last theme used
@@ -811,7 +828,7 @@ def set_theme():
     browser tab does, so localStorage alone silently resets there."""
     data = request.get_json(force=True, silent=True) or {}
     theme = data.get("theme")
-    if not isinstance(theme, str) or not theme:
+    if theme not in VALID_THEMES:
         abort(400)
     jukebox_config.update_config(lambda cfg: cfg.__setitem__("theme", theme))
     return jsonify({"ok": True})
@@ -828,7 +845,7 @@ def set_wood_finish():
     /api/theme above."""
     data = request.get_json(force=True, silent=True) or {}
     wood_finish = data.get("woodFinish")
-    if not isinstance(wood_finish, str) or not wood_finish:
+    if wood_finish not in VALID_WOOD_FINISHES:
         abort(400)
     jukebox_config.update_config(lambda cfg: cfg.__setitem__("woodFinish", wood_finish))
     return jsonify({"ok": True})
@@ -845,7 +862,7 @@ def set_cassette_design():
     -- same persistence story as /api/theme and /api/wood-finish above."""
     data = request.get_json(force=True, silent=True) or {}
     cassette_design = data.get("cassetteDesign")
-    if not isinstance(cassette_design, str) or not cassette_design:
+    if cassette_design not in VALID_CASSETTE_DESIGNS:
         abort(400)
     jukebox_config.update_config(lambda cfg: cfg.__setitem__("cassetteDesign", cassette_design))
     return jsonify({"ok": True})
@@ -863,7 +880,7 @@ def set_vu_color():
     /api/theme and /api/wood-finish above."""
     data = request.get_json(force=True, silent=True) or {}
     vu_color = data.get("vuColor")
-    if not isinstance(vu_color, str) or not vu_color:
+    if vu_color not in VALID_VU_COLORS:
         abort(400)
     jukebox_config.update_config(lambda cfg: cfg.__setitem__("vuColor", vu_color))
     return jsonify({"ok": True})
@@ -1214,8 +1231,8 @@ def duplicates():
     total_groups = len(result)
     total_tracks = sum(len(g["tracks"]) for g in result)
 
-    limit = min(int(request.args.get("limit", 30)), 100)
-    offset = int(request.args.get("offset", 0))
+    limit = min(_parse_int_arg(request.args.get("limit", 30), "limit"), 100)
+    offset = _parse_int_arg(request.args.get("offset", 0), "offset")
     page = result[offset:offset + limit]
 
     return jsonify({
@@ -1518,8 +1535,8 @@ def duplicates_review():
     db = get_db()
     _to_delete, _groups_cleaned, skipped_groups, _repeat_groups_cleaned, _same_recording_cleaned = _get_cached_dup_plan(db)
 
-    limit = min(int(request.args.get("limit", 20)), 50)
-    offset = int(request.args.get("offset", 0))
+    limit = min(_parse_int_arg(request.args.get("limit", 20), "limit"), 50)
+    offset = _parse_int_arg(request.args.get("offset", 0), "offset")
     page = skipped_groups[offset:offset + limit]
 
     return jsonify({
@@ -1529,6 +1546,19 @@ def duplicates_review():
         ],
         "total_groups": len(skipped_groups),
     })
+
+
+def _parse_int_arg(value, field_name):
+    """Query params that get fed straight into int() (limit, offset, decade,
+    rating, ...) used to let a malformed value (a stale bookmarked URL, a
+    hand-edited link) raise an unhandled ValueError and crash the request
+    with a raw 500 instead of a clean, actionable 400 -- this is the one
+    place that conversion happens now, so every caller gets the same
+    clean failure instead of needing its own try/except."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        abort(400, description=f"'{field_name}' must be a whole number, got {value!r}")
 
 
 def _build_track_filter(args=None):
@@ -1575,7 +1605,7 @@ def _build_track_filter(args=None):
         where.append(f"t.primary_genre IN ({','.join('?' * len(values))})")
         params += values
     if decade:
-        values = [int(v) for v in str(decade).split(",") if v]
+        values = [_parse_int_arg(v, "decade") for v in str(decade).split(",") if v]
         where.append(f"t.decade IN ({','.join('?' * len(values))})")
         params += values
     if language:
@@ -1586,10 +1616,10 @@ def _build_track_filter(args=None):
         where.append("r.rating IS NOT NULL")
     if rating:
         where.append("r.rating = ?")
-        params.append(int(rating))
+        params.append(_parse_int_arg(rating, "rating"))
     if rating_min:
         where.append("r.rating >= ?")
-        params.append(int(rating_min))
+        params.append(_parse_int_arg(rating_min, "rating_min"))
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     return where_sql, params
@@ -1610,8 +1640,8 @@ def track_ids():
 def tracks():
     db = get_db()
     sort = request.args.get("sort", "artist")
-    limit = min(int(request.args.get("limit", 100)), 500)
-    offset = int(request.args.get("offset", 0))
+    limit = min(_parse_int_arg(request.args.get("limit", 100), "limit"), 500)
+    offset = _parse_int_arg(request.args.get("offset", 0), "offset")
 
     where_sql, params = _build_track_filter()
     sort_map = {
@@ -2157,7 +2187,7 @@ def radio():
     or, failing that, tracks similar to a seed track (?seed=)."""
     db = get_db()
     genre = (request.args.get("genre") or "").strip()
-    count = min(int(request.args.get("count", 30)), 100)
+    count = min(_parse_int_arg(request.args.get("count", 30), "count"), 100)
     if genre:
         rows = db.execute(
             f"SELECT {TRACK_FIELDS} FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id "
@@ -2209,7 +2239,7 @@ def list_smart_playlists():
 @app.route("/api/smart-playlists", methods=["POST"])
 def create_smart_playlist():
     data = request.get_json(force=True, silent=True) or {}
-    name = (data.get("name") or "").strip()
+    name = (data.get("name") or "").strip()[:SMART_PLAYLIST_NAME_MAX_LEN]
     rules = data.get("rules") or {}
     if not name or not isinstance(rules, dict):
         abort(400)
@@ -2273,6 +2303,7 @@ def list_playlists():
 def create_playlist():
     data = request.get_json(force=True, silent=True) or {}
     name = (data.get("name") or "").strip() or f"Playlist {datetime.datetime.now():%Y-%m-%d %H:%M}"
+    name = name[:PLAYLIST_NAME_MAX_LEN]
     db = get_db()
     cur = db.execute(
         "INSERT INTO playlists (name, created_at) VALUES (?, ?)",
@@ -2282,12 +2313,25 @@ def create_playlist():
     playlist_id = cur.lastrowid
 
     track_ids = data.get("track_ids") or []
-    for i, tid in enumerate(track_ids):
-        db.execute(
-            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?,?,?)",
-            (playlist_id, tid, i),
-        )
-    db.commit()
+    if track_ids:
+        # An id that doesn't actually exist in tracks used to reach the
+        # INSERT below and raise a raw sqlite3.IntegrityError (foreign key
+        # violation) -- e.g. a stale id from a client that hasn't
+        # refreshed since the last rescan removed the track. Filtering to
+        # ids that actually exist keeps this a normal, silent no-op for
+        # those instead of a 500 for the whole request.
+        placeholders = ",".join("?" * len(track_ids))
+        valid_ids = {
+            r[0] for r in db.execute(
+                f"SELECT id FROM tracks WHERE id IN ({placeholders})", track_ids
+            ).fetchall()
+        }
+        for i, tid in enumerate(t for t in track_ids if t in valid_ids):
+            db.execute(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?,?,?)",
+                (playlist_id, tid, i),
+            )
+        db.commit()
     return jsonify({"id": playlist_id, "name": name})
 
 
@@ -2310,6 +2354,8 @@ def get_playlist(playlist_id):
 @app.route("/api/playlists/<int:playlist_id>", methods=["DELETE"])
 def delete_playlist(playlist_id):
     db = get_db()
+    if not db.execute("SELECT 1 FROM playlists WHERE id=?", (playlist_id,)).fetchone():
+        abort(404)
     db.execute("DELETE FROM playlists WHERE id=?", (playlist_id,))
     db.commit()
     return jsonify({"ok": True})
@@ -2325,6 +2371,20 @@ def add_playlist_track(playlist_id):
             abort(400)
         track_ids = [single]
     db = get_db()
+    # A nonexistent playlist_id or track_id used to reach the INSERT below
+    # and raise a raw sqlite3.IntegrityError (foreign key violation)
+    # instead of a clean 404/no-op -- e.g. a playlist deleted in another
+    # tab, or a stale track id from a client that hasn't refreshed since
+    # the last rescan removed the track.
+    if not db.execute("SELECT 1 FROM playlists WHERE id=?", (playlist_id,)).fetchone():
+        abort(404)
+    placeholders = ",".join("?" * len(track_ids))
+    valid_ids = {
+        r[0] for r in db.execute(
+            f"SELECT id FROM tracks WHERE id IN ({placeholders})", track_ids
+        ).fetchall()
+    }
+    track_ids = [t for t in track_ids if t in valid_ids]
     pos_row = db.execute(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_tracks WHERE playlist_id=?",
         (playlist_id,),

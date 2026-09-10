@@ -163,14 +163,19 @@ def build_schema(conn):
     conn.commit()
 
 
-def scan(progress_cb=None):
+def scan(progress_cb=None, force_prune=False):
     """progress_cb(done, total), called after every file -- lets a caller
     (app.py's /api/choose-folder and /api/rescan, both of which used to
     block silently for the whole scan with zero feedback) show live
     progress instead of just looking hung on a large library. `total` comes
     from a first, cheap filename-only walk (no mutagen/tag reads) before
     the real pass, so it's a real count from the start rather than growing
-    as files are found."""
+    as files are found.
+
+    force_prune=True bypasses the >20%-removal safety guard below for this
+    one explicit run -- for a caller that's already shown the user the
+    guard's warning and gotten explicit confirmation this is expected
+    (e.g. a real reorganization), not something to ever default to."""
     if not MUSIC_DIR or not os.path.isdir(MUSIC_DIR):
         raise RuntimeError(f"Music directory not set or not found: {MUSIC_DIR}")
 
@@ -296,7 +301,11 @@ def scan(progress_cb=None):
     # than a fifth of the index (and require a meaningful minimum) in one
     # pass; a genuine mass-deletion of files on disk is rare enough that
     # requiring a second, explicit rescan to confirm is the safer default.
-    suspicious = bool(existing_paths) and len(removed_paths) > max(50, len(existing_paths) * 0.2)
+    suspicious = (
+        not force_prune
+        and bool(existing_paths)
+        and len(removed_paths) > max(50, len(existing_paths) * 0.2)
+    )
     if suspicious:
         removed_paths = set()
     else:
