@@ -530,6 +530,20 @@ button {
 .dup-summary-note { color: var(--text-dim); font-size: 12px; }
 .dup-clean-btn { width: 100%; padding: 10px; font-size: 13px; }
 .dup-toggle-details { margin-top: 10px; }
+.dup-progress {
+  margin-top: 10px;
+  height: 6px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.dup-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.2s ease-out;
+}
 .dup-details {
   margin-top: 12px;
   max-height: 220px;
@@ -542,8 +556,12 @@ button {
   font-size: 12px;
   padding: 3px 0;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
 }
 .dup-detail-row:last-child { border-bottom: none; }
+.dup-detail-row.dup-detail-failed { color: var(--danger); }
 
 .dup-review-panel { width: min(720px, 94vw); }
 .dup-review-load-more { width: 100%; margin-top: 8px; }
@@ -900,6 +918,7 @@ body[data-theme="graphite"] .modal { box-shadow: 2px 2px 10px rgba(0,0,0,.6); }
 }
 .app.focus-mode .theme-stage {
   width: 100%;
+  max-width: none;
   border-left: none;
 }
 
@@ -946,6 +965,7 @@ body.popout-body .popout-wrap {
 }
 body.popout-body .theme-stage {
   width: 100%;
+  max-width: none;
   flex: 1;
   min-height: 0;
   border-left: none;
@@ -1400,11 +1420,23 @@ body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
    the turntable housing (with its real wood-grain texture, below) is the
    only textured surface in the stage instead of competing with a second
    patterned layer behind it. */
+/* Centers .turntable and clips it via overflow:hidden rather than letting
+   #theme-stage's overflow-y:auto put up a scrollbar -- fitStagePanel()'s
+   shrink-to-fit transform only changes how the panel is PAINTED, not its
+   layout box, so without this the (still full-size, pre-transform) layout
+   box would keep reporting a real scrollable overflow even once the
+   visible, scaled-down turntable fits perfectly fine on its own. */
+#stage-vinyl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
 #stage-vinyl .turntable {
   position: relative;
   display: flex; flex-direction: column; align-items: center;
   min-height: 100%;
-  padding: 26px 26px 26px;
+  padding: 20px 26px 20px;
   background: var(--bg-elevated);
 }
 /* The turntable housing itself, as a distinct object resting on the flat
@@ -1418,9 +1450,9 @@ body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
 #stage-vinyl .turntable-body {
   width: 100%; flex: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 16px;
+  gap: 14px;
   min-height: 0;
-  padding: 22px 0;
+  padding: 16px 0;
   border-radius: 10px;
   background-image: var(--wood-grain);
   background-size: cover;
@@ -1458,7 +1490,7 @@ body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
    fader -- the ticks are a plain repeating pattern on the track's own
    pseudo-element, off to one side of the actual (still rotated-native-
    range) control. */
-#stage-vinyl .vinyl-fader-track { position: relative; width: 30px; height: 300px; }
+#stage-vinyl .vinyl-fader-track { position: relative; width: 30px; height: 165px; }
 #stage-vinyl .vinyl-fader-track::after {
   content: "";
   position: absolute; right: 2px; top: 8px; bottom: 8px; width: 4px;
@@ -1468,7 +1500,7 @@ body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
 #stage-vinyl .vinyl-fader {
   -webkit-appearance: none; appearance: none;
   position: absolute; top: 50%; left: 50%;
-  width: 284px; height: 16px; margin: 0;
+  width: 149px; height: 16px; margin: 0;
   transform: translate(-50%, -50%) rotate(-90deg);
   border-radius: 2px;
   background: linear-gradient(180deg, #050505, #1c1c1c 50%, #050505);
@@ -1602,7 +1634,7 @@ body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
 }
 #stage-vinyl .vinyl-nameplate {
   width: 350px;
-  padding: 9px 16px 10px;
+  padding: 8px 16px 9px;
   background: linear-gradient(180deg, #241c17, #14100f);
   border: 1px solid #c9a227;
   border-radius: 6px;
@@ -1635,7 +1667,6 @@ body[data-theme="vinyl"] .theme-stage { width: 680px; max-width: 32vw; }
 
 #stage-vinyl .vinyl-transport {
   display: flex; align-items: center; justify-content: center; gap: 18px;
-  margin-top: 14px;
 }
 #stage-vinyl .vinyl-btn {
   width: 42px; height: 42px;

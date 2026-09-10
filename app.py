@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import cmath
+import io
 import json
 import os
 import random
@@ -1531,7 +1532,7 @@ def duplicates_auto_clean():
             "groups_skipped": groups_skipped,
             "repeat_groups_cleaned": repeat_groups_cleaned,
             "same_recording_cleaned": same_recording_cleaned,
-            "tracks": [{"artist": t["artist"], "title": t["title"]} for t in to_delete],
+            "tracks": [{"id": t["id"], "artist": t["artist"], "title": t["title"]} for t in to_delete],
             "skipped_groups": skipped_groups,
         })
 
@@ -1735,10 +1736,47 @@ def _extract_art(fpath):
     return None, None
 
 
-def get_art(track_id, fpath):
-    """Cache-backed lookup of a track's embedded cover art on disk."""
+# Some rippers embed covers well above 1000px on a side, several MB each --
+# fine to keep on disk once, but wasteful to decode and transfer at full size
+# for every display. ART_MAX_DIM covers the biggest on-screen art (HiFi
+# theme's 190px frame) with headroom for high-DPI screens; ART_THUMB_DIM is
+# for spots that render many covers at once (track list, mini now-playing
+# bar), both 32-44px CSS but re-rendered on every scroll frame.
+ART_MAX_DIM = 640
+ART_THUMB_DIM = 128
+
+
+def _resize_art(data, max_dim):
+    """Downscale image bytes to fit within max_dim x max_dim, re-encoded as
+    JPEG. Returns (bytes, mime), or (None, None) if Pillow isn't installed
+    or the image can't be decoded -- callers fall back to the original
+    bytes so a missing/broken Pillow never breaks art, just skips the
+    resize."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None, None
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=85)
+        return out.getvalue(), "image/jpeg"
+    except Exception:
+        return None, None
+
+
+def get_art(track_id, fpath, thumb=False):
+    """Cache-backed lookup of a track's embedded cover art on disk. `thumb`
+    returns the small ART_THUMB_DIM re-encode, cached separately from the
+    ART_MAX_DIM "full" copy so list scrolling never has to decode/transfer
+    full-resolution art for a 32px row."""
+    suffix = ".thumb" if thumb else ""
     for ext, mime in ((".jpg", "image/jpeg"), (".png", "image/png")):
-        cached = os.path.join(ART_CACHE_DIR, f"{track_id}{ext}")
+        cached = os.path.join(ART_CACHE_DIR, f"{track_id}{suffix}{ext}")
         if os.path.isfile(cached):
             with open(cached, "rb") as f:
                 return f.read(), mime
@@ -1746,13 +1784,25 @@ def get_art(track_id, fpath):
         return None, None
 
     data, mime = _extract_art(fpath)
-    if data:
-        ext = ".png" if mime == "image/png" else ".jpg"
-        with open(os.path.join(ART_CACHE_DIR, f"{track_id}{ext}"), "wb") as f:
-            f.write(data)
-    else:
+    if not data:
         open(os.path.join(ART_CACHE_DIR, f"{track_id}.none"), "wb").close()
-    return data, mime
+        return None, None
+
+    full_data, full_mime = _resize_art(data, ART_MAX_DIM)
+    if full_data is None:
+        full_data, full_mime = data, mime
+    full_ext = ".png" if full_mime == "image/png" else ".jpg"
+    with open(os.path.join(ART_CACHE_DIR, f"{track_id}{full_ext}"), "wb") as f:
+        f.write(full_data)
+
+    thumb_data, thumb_mime = _resize_art(data, ART_THUMB_DIM)
+    if thumb_data is not None:
+        with open(os.path.join(ART_CACHE_DIR, f"{track_id}.thumb.jpg"), "wb") as f:
+            f.write(thumb_data)
+
+    if thumb:
+        return (thumb_data, thumb_mime) if thumb_data is not None else (full_data, full_mime)
+    return full_data, full_mime
 
 
 @app.route("/api/art/<int:track_id>")
@@ -1762,7 +1812,7 @@ def art(track_id):
     if not row:
         abort(404)
     fpath = os.path.join(MUSIC_DIR, row["path"])
-    data, mime = get_art(track_id, fpath)
+    data, mime = get_art(track_id, fpath, thumb=request.args.get("thumb") == "1")
     if not data:
         abort(404)
     resp = make_response(data)
@@ -1804,6 +1854,12 @@ def fetch_art(track_id):
     none_marker = os.path.join(ART_CACHE_DIR, f"{track_id}.none")
     if os.path.isfile(none_marker):
         os.remove(none_marker)
+    # The old thumb (if any) was re-encoded from whatever art -- or lack of
+    # it -- existed before this fetch; drop it so get_art regenerates one
+    # from the new cover on next request instead of serving a stale thumb.
+    thumb_cached = os.path.join(ART_CACHE_DIR, f"{track_id}.thumb.jpg")
+    if os.path.isfile(thumb_cached):
+        os.remove(thumb_cached)
     db.execute("UPDATE tracks SET has_art=1 WHERE id=?", (track_id,))
     db.commit()
     return jsonify({"ok": True, "track_id": track_id})
@@ -1978,7 +2034,7 @@ def _delete_track_rows(db, rows, progress_cb=None):
              row["album"] if "album" in row.keys() else None,
              datetime.datetime.utcnow().isoformat()),
         )
-        for ext in (".jpg", ".png", ".none"):
+        for ext in (".jpg", ".png", ".none", ".thumb.jpg", ".thumb.png"):
             cached = os.path.join(ART_CACHE_DIR, f"{row['id']}{ext}")
             if os.path.isfile(cached):
                 os.remove(cached)

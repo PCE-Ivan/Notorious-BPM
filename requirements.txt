@@ -1,6 +1,7 @@
 flask
 mutagen
 langdetect
+Pillow
 pyinstaller
 pywebview
 pythonnet; platform_system == "Windows"

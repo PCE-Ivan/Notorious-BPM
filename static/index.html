@@ -464,18 +464,18 @@
                 </div>
               </div>
             </div>
-            <div class="vinyl-rail">
-              <div class="vinyl-fader-group">
-                <span class="vinyl-fader-label">Track</span>
-                <div class="vinyl-fader-track">
-                  <input id="vinyl-seek" type="range" min="0" max="100" value="0" class="vinyl-fader">
-                </div>
+          </div>
+          <div class="vinyl-rail">
+            <div class="vinyl-fader-group">
+              <span class="vinyl-fader-label">Track</span>
+              <div class="vinyl-fader-track">
+                <input id="vinyl-seek" type="range" min="0" max="100" value="0" class="vinyl-fader">
               </div>
-              <div class="vinyl-fader-group">
-                <span class="vinyl-fader-label">Vol</span>
-                <div class="vinyl-fader-track">
-                  <input id="vinyl-volume" type="range" min="0" max="100" value="100" class="vinyl-fader vinyl-fader-vol">
-                </div>
+            </div>
+            <div class="vinyl-fader-group">
+              <span class="vinyl-fader-label">Vol</span>
+              <div class="vinyl-fader-track">
+                <input id="vinyl-volume" type="range" min="0" max="100" value="100" class="vinyl-fader vinyl-fader-vol">
               </div>
             </div>
           </div>
@@ -483,12 +483,12 @@
             <div class="vinyl-nameplate-line vinyl-nameplate-artist" id="vinyl-np-artist"></div>
             <div class="vinyl-nameplate-line vinyl-nameplate-title" id="vinyl-np-title"></div>
           </div>
-        </div>
 
-        <div class="vinyl-transport">
-          <button id="vinyl-prev" class="vinyl-btn" title="Previous track">⏮</button>
-          <button id="vinyl-play-pause" class="vinyl-btn vinyl-btn-play" title="Play/Pause">▶</button>
-          <button id="vinyl-next" class="vinyl-btn" title="Next similar track">⏭</button>
+          <div class="vinyl-transport">
+            <button id="vinyl-prev" class="vinyl-btn" title="Previous track">⏮</button>
+            <button id="vinyl-play-pause" class="vinyl-btn vinyl-btn-play" title="Play/Pause">▶</button>
+            <button id="vinyl-next" class="vinyl-btn" title="Next similar track">⏭</button>
+          </div>
         </div>
       </div>
     </div>
@@ -559,6 +559,7 @@
     <div class="dup-body">
       <p id="dup-summary" class="dup-summary-text">Scanning your library for duplicates…</p>
       <button id="dup-clean-btn" class="btn-primary dup-clean-btn hidden">Remove duplicates</button>
+      <div id="dup-progress" class="dup-progress hidden"><div id="dup-progress-fill" class="dup-progress-fill"></div></div>
       <button id="dup-toggle-details" class="btn-small dup-toggle-details hidden">Show details</button>
       <div id="dup-details" class="dup-details hidden"></div>
       <button id="dup-review-open" class="btn-secondary dup-clean-btn hidden">Review remaining duplicates</button>

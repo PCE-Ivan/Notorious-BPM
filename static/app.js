@@ -249,8 +249,8 @@ async function rateTrack(t, rating, starsBox) {
   return rating;
 }
 
-function artUrl(trackId) {
-  return `${API}/art/${trackId}`;
+function artUrl(trackId, thumb) {
+  return `${API}/art/${trackId}${thumb ? "?thumb=1" : ""}`;
 }
 
 function renderTrackList(container, list, { showAdd, append } = {}) {
@@ -263,7 +263,7 @@ function renderTrackList(container, list, { showAdd, append } = {}) {
     if (state.selected.has(t.id)) row.classList.add("selected");
     row.innerHTML = `
       <div class="col-check"><input type="checkbox" ${state.selected.has(t.id) ? "checked" : ""}></div>
-      <div class="col-art"><img loading="lazy" src="${artUrl(t.id)}" alt="" onerror="this.remove()"></div>
+      <div class="col-art"><img loading="lazy" src="${artUrl(t.id, true)}" alt="" onerror="this.remove()"></div>
       <div class="col-idx">${baseIdx + i + 1}</div>
       <div class="col-title" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "")}</div>
       <div class="col-artist" title="${escapeHtml(t.artist || "")}">${escapeHtml(t.artist || "")}</div>
@@ -493,7 +493,7 @@ function playTrack(track, contextList, opts) {
   const artEl = el("np-art");
   artEl.classList.remove("hidden");
   artEl.onerror = () => artEl.classList.add("hidden");
-  artEl.src = artUrl(track.id);
+  artEl.src = artUrl(track.id, true);
   const artFetchBtn = el("art-fetch-btn");
   if (artFetchBtn) artFetchBtn.classList.remove("hidden");
   el("radio-identify-btn").classList.add("hidden");
@@ -822,18 +822,34 @@ function fitStagePanel() {
   if (!stage) return;
   const sel = STAGE_CONTENT_SELECTOR[state.theme];
   const content = sel ? stage.querySelector(sel) : null;
-  const scaling = isStageScaled();
-
   if (!content) return;
-  if (!scaling || stage.classList.contains("hidden")) {
+  if (stage.classList.contains("hidden")) {
     content.style.transform = "";
     return;
   }
+
+  const scaling = isStageScaled();
   content.style.transform = "none";
   const naturalW = content.offsetWidth, naturalH = content.offsetHeight;
   const availW = stage.clientWidth, availH = stage.clientHeight;
   if (!naturalW || !naturalH || !availW || !availH) return;
-  content.style.transform = `scale(${Math.min(availW / naturalW, availH / naturalH)})`;
+
+  if (scaling) {
+    content.style.transform = `scale(${Math.min(availW / naturalW, availH / naturalH)})`;
+  } else if (state.theme === "vinyl") {
+    // Normal sidebar layout, vinyl only: never scale UP (hifi/cassette stay
+    // exactly as before -- hand-fitted to their normal width, no shrink
+    // logic) but DO shrink the turntable as one rigid unit if its natural
+    // content no longer fits the space actually available. Needed because
+    // the fader rail is sized as a real proportion of the wood panel
+    // (see .vinyl-fader-track) rather than however much happened to be
+    // left over, which can make the panel's natural height taller than a
+    // shorter window's sidebar row.
+    const fitScale = Math.min(1, availW / naturalW, availH / naturalH);
+    content.style.transform = fitScale < 1 ? `scale(${fitScale})` : "";
+  } else {
+    content.style.transform = "";
+  }
 }
 
 // The panel's own natural (unscaled) width/height -- used to size the
@@ -1296,6 +1312,7 @@ function themeOnTrackChange(track, artworkUrl) {
   updateVinylTonearm();
   renderScrollingText("vinyl-np-artist", track.artist || "Unknown Artist");
   renderScrollingText("vinyl-np-title", track.title || "Untitled");
+  fitStagePanel();
 }
 
 // Tape wound around a reel is a ring outside the hub, drawn as a stroked
@@ -2481,6 +2498,8 @@ async function scanDuplicates() {
   el("dup-toggle-details").classList.add("hidden");
   el("dup-details").classList.add("hidden");
   el("dup-details").innerHTML = "";
+  delete el("dup-details").dataset.rendered;
+  el("dup-progress").classList.add("hidden");
   el("dup-review-open").classList.add("hidden");
 
   const preview = await api("/duplicates/auto-clean", {
@@ -2524,16 +2543,20 @@ async function scanDuplicates() {
   }
 }
 
+function renderDupDetails() {
+  const details = el("dup-details");
+  if (details.dataset.rendered) return;
+  details.innerHTML = (dupState.preview.tracks || [])
+    .map((t) => `<div class="dup-detail-row" data-track-id="${t.id}"><span>${escapeHtml(t.artist || "Unknown artist")} — ${escapeHtml(t.title)}</span></div>`)
+    .join("");
+  details.dataset.rendered = "1";
+}
+
 el("dup-toggle-details").addEventListener("click", () => {
   const details = el("dup-details");
   const showing = details.classList.toggle("hidden") === false;
   el("dup-toggle-details").textContent = showing ? "Hide details" : "Show details";
-  if (showing && !details.dataset.rendered) {
-    details.innerHTML = (dupState.preview.tracks || [])
-      .map((t) => `<div class="dup-detail-row">${escapeHtml(t.artist || "Unknown artist")} — ${escapeHtml(t.title)}</div>`)
-      .join("");
-    details.dataset.rendered = "1";
-  }
+  if (showing) renderDupDetails();
 });
 
 el("dup-clean-btn").addEventListener("click", async () => {
@@ -2547,6 +2570,18 @@ el("dup-clean-btn").addEventListener("click", async () => {
   const btn = el("dup-clean-btn");
   btn.disabled = true;
   btn.textContent = "Removing…";
+
+  // Show the file-by-file list (already built from the preview) alongside
+  // the progress bar so removed entries can be struck off it below as soon
+  // as the run finishes, instead of the whole thing just vanishing.
+  renderDupDetails();
+  el("dup-toggle-details").classList.add("hidden");
+  el("dup-details").classList.remove("hidden");
+  const progressEl = el("dup-progress");
+  const progressFill = el("dup-progress-fill");
+  progressFill.style.width = "0%";
+  progressEl.classList.remove("hidden");
+
   const started = await api("/duplicates/auto-clean", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2555,6 +2590,9 @@ el("dup-clean-btn").addEventListener("click", async () => {
   if (started.error) {
     btn.disabled = false;
     btn.textContent = `Remove ${preview.tracks_to_delete.toLocaleString()} duplicate version(s)`;
+    progressEl.classList.add("hidden");
+    el("dup-details").classList.add("hidden");
+    el("dup-toggle-details").classList.remove("hidden");
     alert(started.error === "Already running" ? "A cleanup is already running." : started.error);
     return;
   }
@@ -2568,6 +2606,7 @@ el("dup-clean-btn").addEventListener("click", async () => {
   try {
     status = await pollProgress("/duplicates/auto-clean/progress", (s) => {
       btn.textContent = s.total ? `Removing… ${s.done}/${s.total}` : "Removing…";
+      progressFill.style.width = s.total ? `${Math.min(100, (s.done / s.total) * 100)}%` : "0%";
       return s.running;
     });
   } catch (e) {
@@ -2576,13 +2615,29 @@ el("dup-clean-btn").addEventListener("click", async () => {
   }
   dupState.anyDeleted = true;
   btn.classList.add("hidden");
-  el("dup-toggle-details").classList.add("hidden");
-  el("dup-details").classList.add("hidden");
+  progressEl.classList.add("hidden");
   if (status.error) {
     el("dup-summary").textContent = `Removal failed: ${status.error}`;
     return;
   }
   const errors = status.errors || [];
+  const failedIds = new Set(errors.map((e) => e.track_id));
+  // Every previewed track this run didn't report as failed was actually
+  // deleted -- strike those rows out of the list rather than hiding the
+  // whole thing, and flag the rest with why they're still here.
+  el("dup-details").querySelectorAll(".dup-detail-row").forEach((row) => {
+    const id = Number(row.dataset.trackId);
+    if (failedIds.has(id)) {
+      row.classList.add("dup-detail-failed");
+      const err = errors.find((e) => e.track_id === id);
+      row.querySelector("span").textContent += ` — failed: ${err ? err.error : "unknown error"}`;
+    } else {
+      row.remove();
+    }
+  });
+  if (!el("dup-details").querySelector(".dup-detail-row")) {
+    el("dup-details").classList.add("hidden");
+  }
   el("dup-summary").textContent = errors.length
     ? `Removed ${status.deleted.toLocaleString()} file(s), ${errors.length} failed.`
     : `Removed ${status.deleted.toLocaleString()} file(s). One copy of every song was kept.`;
@@ -3060,7 +3115,7 @@ el("art-fetch-btn").addEventListener("click", async () => {
   btn.disabled = true;
   try {
     await api(`/art/${state.currentTrack.id}/fetch`, { method: "POST" });
-    el("np-art").src = `${artUrl(state.currentTrack.id)}?t=${Date.now()}`;
+    el("np-art").src = `${artUrl(state.currentTrack.id, true)}&t=${Date.now()}`;
     el("np-art").classList.remove("hidden");
   } catch (e) {
     alert("Couldn't find cover art for this track.");
