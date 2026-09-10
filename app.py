@@ -1304,6 +1304,9 @@ def _find_repeat_download_dupes(db):
     return to_delete, clean_groups
 
 
+_SAME_QUALITY_TOLERANCE = 0.05  # apparent bitrate within 5% counts as "no real difference"
+
+
 def _resolve_same_recording(tracks):
     """For a group where every copy is a "plain" version (no Live/Remaster/
     Mix marker to prefer one over another -- see _plan_auto_clean's
@@ -1311,9 +1314,20 @@ def _resolve_same_recording(tracks):
     artist and title already established the group, so if the durations
     also agree closely, these are almost certainly the same recording
     from different sources/rips rather than different songs that happen
-    to share a title. Picks the highest apparent bitrate (file size ÷
-    duration -- cheap to compute, no need to actually decode anything) as
-    the keeper and returns the rest for removal.
+    to share a title.
+
+    Normally prefers the highest apparent bitrate (file size ÷ duration --
+    cheap to compute, no need to actually decode anything). But when every
+    copy shares the same format and that bitrate is within a few percent
+    across all of them -- i.e. there's no real quality difference to
+    prefer by, just multiple copies of what's almost certainly the exact
+    same rip -- picks the OLDEST file (by mtime) instead: whichever copy
+    showed up more recently is the more likely redundant re-download, not
+    the other way around. mtime rather than a true creation time since
+    it's the one timestamp that means the same thing and is reliably
+    available on every OS this app runs on; a downloaded audio file is
+    essentially never modified after the fact, so "last written" and
+    "created" land on the same moment in practice.
 
     Returns None (leave for manual review) rather than guess when:
     - there are fewer than 2 usable tracks (nothing to compare)
@@ -1338,16 +1352,25 @@ def _resolve_same_recording(tracks):
     for t in tracks:
         fpath = os.path.join(MUSIC_DIR, t["path"])
         try:
-            size = os.path.getsize(fpath)
+            stat = os.stat(fpath)
         except OSError:
             return None
         duration = t["duration"] or 0
-        bitrate_proxy = (size / duration) if duration else 0
-        scored.append((bitrate_proxy, t))
+        bitrate_proxy = (stat.st_size / duration) if duration else 0
+        scored.append({"track": t, "bitrate_proxy": bitrate_proxy, "ext": t.get("ext"), "mtime": stat.st_mtime})
 
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    keep = scored[0][1]
-    remove = [t for _, t in scored[1:]]
+    scored.sort(key=lambda s: s["bitrate_proxy"], reverse=True)
+    best = scored[0]
+    same_quality = all(
+        s["ext"] == best["ext"]
+        and (best["bitrate_proxy"] == 0 or abs(s["bitrate_proxy"] - best["bitrate_proxy"]) / best["bitrate_proxy"] <= _SAME_QUALITY_TOLERANCE)
+        for s in scored
+    )
+    if same_quality:
+        scored.sort(key=lambda s: s["mtime"])  # oldest first
+
+    keep = scored[0]["track"]
+    remove = [s["track"] for s in scored[1:]]
     return keep, remove
 
 
