@@ -53,6 +53,18 @@ async function api(path, opts) {
 // loop simply stops rescheduling, leaving the UI frozen on stale text with
 // no sign anything went wrong. This tolerates a few consecutive failures
 // (worth a brief server hiccup) before surfacing a real error to the caller.
+// Shared visual progress bar pinned to the topbar's bottom edge (see
+// .scan-progress in style.css) -- used by both the choose-folder and
+// rescan flows below, since they're the same underlying scan job.
+function showScanProgress(done, total) {
+  el("scan-progress").classList.remove("hidden");
+  el("scan-progress-fill").style.width = total ? `${Math.min(100, (done / total) * 100)}%` : "3%";
+}
+function hideScanProgress() {
+  el("scan-progress").classList.add("hidden");
+  el("scan-progress-fill").style.width = "0%";
+}
+
 async function pollProgress(path, onTick, { intervalMs = 1000, maxFailures = 5 } = {}) {
   let failures = 0;
   for (;;) {
@@ -1621,24 +1633,28 @@ function updateStars(rating) {
     s.classList.toggle("filled", Number(s.dataset.star) <= rating);
   });
 }
-el("stars").addEventListener("click", async (e) => {
-  const starEl = e.target.closest("span[data-star]");
-  if (!starEl || !state.currentTrack || state.currentTrack.isRadio) return;
+// Shared by the footer star row's click handler and the 1-5 keyboard
+// shortcuts below -- update in place rather than reloading the list, so
+// rating doesn't reset scroll position/pagination. If the track is
+// visible in the current list and the new rating now violates an active
+// rating filter, fade its row out instead of forcing a full reload.
+async function rateCurrentTrack(rating) {
+  if (!state.currentTrack || state.currentTrack.isRadio) return;
   const t = state.currentTrack;
-  // Mirror the inline row-star behavior: update in place rather than
-  // reloading the list, so rating from the footer doesn't reset scroll
-  // position/pagination. If the track is visible in the current list and
-  // the new rating now violates an active rating filter, fade its row out
-  // instead of forcing a full reload.
   const playingRow = document.querySelector(".track-row.playing");
   const rowStars = playingRow ? playingRow.querySelector(".row-stars") : null;
-  const rating = await rateTrack(t, Number(starEl.dataset.star), rowStars);
-  const violatesFilter = (state.ratedOnly && rating === 0) || (state.rating && Number(state.rating) !== rating);
+  const actual = await rateTrack(t, rating, rowStars);
+  const violatesFilter = (state.ratedOnly && actual === 0) || (state.rating && Number(state.rating) !== actual);
   if (playingRow && violatesFilter) {
     playingRow.style.transition = "opacity .2s ease";
     playingRow.style.opacity = "0";
     setTimeout(() => playingRow.remove(), 200);
   }
+}
+el("stars").addEventListener("click", (e) => {
+  const starEl = e.target.closest("span[data-star]");
+  if (!starEl) return;
+  rateCurrentTrack(Number(starEl.dataset.star));
 });
 el("stars").addEventListener("mousemove", (e) => {
   const starEl = e.target.closest("span[data-star]");
@@ -2081,9 +2097,12 @@ async function runRescan(forcePrune = false) {
     }
     // A large library (thousands of files on a freshly-connected drive) can
     // take minutes to scan -- poll instead of waiting on one long blocking
-    // request, so the button shows real progress instead of looking hung.
+    // request, so the button (and the progress bar) shows real progress
+    // instead of looking hung.
+    showScanProgress(0, 0);
     const status = await pollProgress("/scan-progress", (s) => {
       setTileText(btn, s.total ? `Scanning… ${s.done}/${s.total}` : "Scanning…");
+      showScanProgress(s.done, s.total);
       return s.running;
     });
     if (status.error) {
@@ -2111,6 +2130,7 @@ async function runRescan(forcePrune = false) {
     setTimeout(() => { setTileText(btn, original); }, 3000);
   } finally {
     btn.disabled = false;
+    hideScanProgress();
   }
 }
 el("rescan-library").addEventListener("click", () => runRescan(false));
@@ -2482,8 +2502,10 @@ el("choose-folder").addEventListener("click", async () => {
     // happened synchronously before this; the scan itself runs in the
     // background, so poll instead of assuming it's done, same as
     // rescan-library above.
+    showScanProgress(0, 0);
     const status = await pollProgress("/scan-progress", (s) => {
       setTileText(btn, s.total ? `Scanning… ${s.done}/${s.total}` : "Scanning…");
+      showScanProgress(s.done, s.total);
       return s.running;
     });
     clearSelection();
@@ -2505,6 +2527,7 @@ el("choose-folder").addEventListener("click", async () => {
     setTimeout(() => { setTileText(btn, original); }, 3000);
   } finally {
     btn.disabled = false;
+    hideScanProgress();
   }
 });
 
@@ -3036,7 +3059,15 @@ el("prev-track").addEventListener("click", playPrevious);
 document.addEventListener("keydown", (e) => {
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
+  // A bare modifier held down turns most of these into something else
+  // entirely on the OS/browser level (cmd/ctrl+1..5 switches tabs or
+  // desktops in a lot of software) -- worth guarding specifically for the
+  // rating keys below, so that isn't misread as "rate this track".
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
   switch (e.key) {
+    case "1": case "2": case "3": case "4": case "5":
+      rateCurrentTrack(Number(e.key));
+      break;
     case " ":
       e.preventDefault();
       togglePlayPause();

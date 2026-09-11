@@ -56,6 +56,25 @@ html, body {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+/* Folder-pick / rescan progress -- pinned to the topbar's own bottom edge
+   (its own row would either steal space from everything else permanently
+   or reflow the whole toolbar every time a scan starts/stops) so it reads
+   as a transient overlay, like a page-load bar, rather than a layout
+   change. */
+.scan-progress {
+  position: absolute;
+  left: 0; right: 0; bottom: -2px;
+  height: 3px;
+  background: transparent;
+  overflow: hidden;
+  z-index: 6;
+}
+.scan-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.2s ease-out;
+}
 
 .topbar-row1 {
   display: flex;
