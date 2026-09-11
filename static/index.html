@@ -24,8 +24,13 @@
             <div class="stats" id="stats"></div>
             <div class="current-folder" id="current-folder" title=""></div>
           </div>
-          <button id="choose-folder" class="btn-secondary topbar-action-btn" title="Pick a different music folder to scan and use">📁 Folder</button>
-          <button id="rescan-library" class="btn-secondary topbar-action-btn" title="Re-scan the music folder for new/changed files">⟳ Rescan</button>
+          <div class="scan-btn-group">
+            <div class="scan-btn-row">
+              <button id="choose-folder" class="btn-secondary topbar-action-btn" title="Pick a different music folder to scan and use">📁 Folder</button>
+              <button id="rescan-library" class="btn-secondary topbar-action-btn" title="Re-scan the music folder for new/changed files">⟳ Rescan</button>
+            </div>
+            <div id="scan-progress" class="scan-progress hidden"><div id="scan-progress-fill" class="scan-progress-fill"></div></div>
+          </div>
           <div class="topbar-divider"></div>
           <button id="convert-menu" class="btn-secondary topbar-action-btn" title="Convert selected tracks or a whole playlist to another format">⇄ Convert</button>
         </div>
@@ -107,7 +112,6 @@
         </a>
       </div>
     </div>
-    <div id="scan-progress" class="scan-progress hidden"><div id="scan-progress-fill" class="scan-progress-fill"></div></div>
   </header>
 
   <div class="body">

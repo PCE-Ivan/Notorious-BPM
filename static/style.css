@@ -56,18 +56,32 @@ html, body {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-/* Folder-pick / rescan progress -- pinned to the topbar's own bottom edge
-   (its own row would either steal space from everything else permanently
-   or reflow the whole toolbar every time a scan starts/stops) so it reads
-   as a transient overlay, like a page-load bar, rather than a layout
-   change. */
+/* Folder-pick / rescan progress -- sits directly under the two buttons it
+   reports on. A normal-flow row (not an absolutely-positioned overlay)
+   deliberately: an earlier version pinned it to the *topbar's* bottom
+   edge, which put it right where the sidebar/track-list row began --
+   that row painted over it regardless of z-index (z-index only orders
+   elements sharing a stacking context, and doesn't let a topbar
+   descendant outrank an unrelated later sibling of topbar itself), so
+   the bar was there and updating correctly but invisible. Being real
+   flow content inside its own small group sidesteps that whole class of
+   bug -- nothing else can ever paint over it -- at the cost of a few px
+   of height appearing/disappearing right under the buttons while a scan
+   starts/stops. */
+.scan-btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scan-btn-row {
+  display: flex;
+  gap: 8px;
+}
 .scan-progress {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
   height: 3px;
-  background: transparent;
+  border-radius: var(--radius);
+  background: var(--bg-hover);
   overflow: hidden;
-  z-index: 6;
 }
 .scan-progress-fill {
   height: 100%;
