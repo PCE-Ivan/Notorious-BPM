@@ -63,7 +63,7 @@ html, body {
    change. */
 .scan-progress {
   position: absolute;
-  left: 0; right: 0; bottom: -2px;
+  left: 0; right: 0; bottom: 0;
   height: 3px;
   background: transparent;
   overflow: hidden;
