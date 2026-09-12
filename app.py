@@ -887,15 +887,16 @@ def set_vu_color():
     return jsonify({"ok": True})
 
 
-def _pick_folder_dialog():
+def _pick_folder_dialog(prompt="Select the music folder for Notorious B.P.M. to scan"):
     """Native folder picker, per OS: AppleScript on macOS (no extra deps),
     Tk's file dialog everywhere else (bundled with the standard library, so
     it's available even in a PyInstaller-frozen build with no other GUI
     toolkit around). Returns the picked path, or None if cancelled."""
     if sys.platform == "darwin":
+        escaped_prompt = prompt.replace('"', '\\"')
         result = subprocess.run(
             ["osascript", "-e",
-             'POSIX path of (choose folder with prompt "Select the music folder for Notorious B.P.M. to scan")'],
+             f'POSIX path of (choose folder with prompt "{escaped_prompt}")'],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
@@ -908,7 +909,7 @@ def _pick_folder_dialog():
     root.withdraw()
     root.attributes("-topmost", True)
     try:
-        picked = filedialog.askdirectory(title="Select the music folder for Notorious B.P.M. to scan")
+        picked = filedialog.askdirectory(title=prompt)
     finally:
         root.destroy()
     return picked or None
@@ -970,6 +971,29 @@ def convert_status():
     })
 
 
+def _convert_output_dir():
+    """Where converted files get written -- whatever the user last picked
+    via /api/convert/output-dir, or convert_audio's own default the first
+    time (a real folder under ~/Music, never silently chosen without the
+    user being told where it is -- see that route for the actual picker)."""
+    import convert_audio
+    return jukebox_config.load_config().get("convertOutputDir") or convert_audio.OUTPUT_ROOT
+
+
+@app.route("/api/convert/output-dir")
+def get_convert_output_dir():
+    return jsonify({"path": _convert_output_dir()})
+
+
+@app.route("/api/convert/output-dir", methods=["POST"])
+def set_convert_output_dir():
+    picked = _pick_folder_dialog("Select where Notorious B.P.M. should save converted files")
+    if not picked:
+        return jsonify({"ok": False, "cancelled": True})
+    jukebox_config.update_config(lambda cfg: cfg.__setitem__("convertOutputDir", picked))
+    return jsonify({"ok": True, "path": picked})
+
+
 def _convert_track_row(db, track_id, fmt):
     import importlib
     import convert_audio
@@ -983,7 +1007,7 @@ def _convert_track_row(db, track_id, fmt):
         return {"track_id": track_id, "ok": False, "error": f"already {convert_audio.FORMATS[fmt]['label']}"}
     fpath = os.path.join(MUSIC_DIR, row["path"])
     try:
-        out_path, already_existed = convert_audio.convert(fpath, row["artist"], row["title"], fmt)
+        out_path, already_existed = convert_audio.convert(fpath, row["artist"], row["title"], fmt, _convert_output_dir())
         return {"track_id": track_id, "ok": True, "output_path": out_path, "already_existed": already_existed}
     except Exception as e:
         return {"track_id": track_id, "ok": False, "error": str(e)}
@@ -1008,14 +1032,14 @@ _convert_lock = threading.Lock()
 _CONVERT_WORKERS = 4  # each is a real ffmpeg transcode -- CPU/disk heavy, unlike the tag-scan's light file reads
 
 
-def _convert_one_file(track_id, fpath, artist, title, fmt):
+def _convert_one_file(track_id, fpath, artist, title, fmt, output_root):
     """The actual conversion work, run in a worker thread -- deliberately
     takes plain file/tag values rather than a db handle, so no sqlite
     connection is ever touched off the main thread (sqlite3 connections
     aren't safe to share across concurrent threads)."""
     import convert_audio
     try:
-        out_path, already_existed = convert_audio.convert(fpath, artist, title, fmt)
+        out_path, already_existed = convert_audio.convert(fpath, artist, title, fmt, output_root)
         return {"track_id": track_id, "ok": True, "output_path": out_path, "already_existed": already_existed}
     except Exception as e:
         return {"track_id": track_id, "ok": False, "error": str(e)}
@@ -1026,6 +1050,7 @@ def _run_convert_bg(track_ids, fmt):
         import importlib
         import convert_audio
         importlib.reload(convert_audio)
+        output_root = _convert_output_dir()
 
         # All the sqlite reads happen here, up front, on this one thread --
         # the thread pool below only ever calls _convert_one_file, which
@@ -1069,7 +1094,7 @@ def _run_convert_bg(track_ids, fmt):
 
         with ThreadPoolExecutor(max_workers=_CONVERT_WORKERS) as pool:
             futures = {
-                pool.submit(_convert_one_file, track_id, fpath, artist, title, fmt): i
+                pool.submit(_convert_one_file, track_id, fpath, artist, title, fmt, output_root): i
                 for i, (track_id, fpath, artist, title) in to_submit.items()
             }
             for future in as_completed(futures):

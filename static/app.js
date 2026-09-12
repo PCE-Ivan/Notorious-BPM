@@ -430,10 +430,11 @@ el("selection-add-to-playlist").addEventListener("click", () => {
 });
 el("selection-convert").addEventListener("click", () => {
   if (state.selected.size === 0) return;
-  openFormatPickerModal("Convert selected tracks", (fmt) => {
-    runConvert("/convert-tracks", { track_ids: [...state.selected], format: fmt }, el("selection-convert"),
-      (r) => { clearSelection(); return `${r.converted}/${r.total} converted`; });
-  });
+  openFormatPickerModal("Convert selected tracks", (fmt) => ({
+    endpoint: "/convert-tracks",
+    body: { track_ids: [...state.selected], format: fmt },
+    resultTextFn: (r) => { clearSelection(); return `${r.converted}/${r.total} converted`; },
+  }));
 });
 
 function escapeHtml(s) {
@@ -1938,32 +1939,55 @@ originalBackHandler.addEventListener("click", () => {
 });
 
 // -------------------------------------------------------------- convert --
-function openFormatPickerModal(title, onPick) {
+// `buildRequest(fmt)` returns {endpoint, body, resultTextFn} for whatever
+// is being converted (a selection or a whole playlist) -- kept as a plain
+// object builder rather than an immediate API call so this can show the
+// destination folder and let it be changed before anything actually
+// starts.
+async function openFormatPickerModal(title, buildRequest) {
+  const dest = await api("/convert/output-dir");
   const body = `
     <p style="color:var(--text-dim);font-size:12px;margin:0 0 12px">
-      Writes a new file to <code>~/Music/Notorious BPM Converted/&lt;Format&gt;</code> — your original is never
-      touched or deleted. Converting into MP3 320 is lossy; converting a lossy source (MP3/AAC) into
-      FLAC/ALAC repackages it without recovering lost quality.
+      Writes a new file -- your original is never touched or deleted. Converting into MP3 320 is lossy;
+      converting a lossy source (MP3/AAC) into FLAC/ALAC repackages it without recovering lost quality.
     </p>
-    <div id="format-picker" style="display:flex;flex-direction:column;gap:6px">
+    <div class="convert-dest-row">
+      <span class="convert-dest-label">Save to:</span>
+      <span id="convert-dest-path" class="convert-dest-path" title="${escapeHtml(dest.path)}">${escapeHtml(dest.path)}</span>
+      <button id="convert-dest-change" class="btn-small">Change…</button>
+    </div>
+    <div id="format-picker" style="display:flex;flex-direction:column;gap:6px;margin-top:12px">
       <div class="modal-list-item" data-format="flac"><span>FLAC</span><span class="count">lossless</span></div>
       <div class="modal-list-item" data-format="alac"><span>ALAC</span><span class="count">lossless, .m4a</span></div>
       <div class="modal-list-item" data-format="mp3320"><span>MP3 320</span><span class="count">lossy, smaller</span></div>
     </div>
   `;
   openModal(title, body, () => {});
+  el("convert-dest-change").addEventListener("click", async () => {
+    const result = await api("/convert/output-dir", { method: "POST" });
+    if (result.ok) {
+      el("convert-dest-path").textContent = result.path;
+      el("convert-dest-path").title = result.path;
+    }
+  });
   document.querySelectorAll("#format-picker .modal-list-item").forEach((item) => {
     item.addEventListener("click", () => {
-      closeModal();
-      onPick(item.dataset.format);
+      const { endpoint, body: reqBody, resultTextFn } = buildRequest(item.dataset.format);
+      runConvertInModal(endpoint, reqBody, resultTextFn);
     });
   });
 }
 
-async function runConvert(endpoint, body, btnEl, resultTextFn) {
-  const original = getTileText(btnEl);
-  setTileText(btnEl, "Converting…");
-  btnEl.disabled = true;
+// Replaces the modal's own body with a progress view and runs the convert
+// job in place, rather than closing the modal and tracking progress on
+// whichever button was clicked -- convert can be triggered from three
+// different toolbar/playlist buttons, and a visual bar reads better here
+// than squeezed under an arbitrary button anyway.
+async function runConvertInModal(endpoint, body, resultTextFn) {
+  el("modal-body").innerHTML = `
+    <p id="convert-status" class="dup-summary-text">Converting…</p>
+    <div id="convert-progress" class="dup-progress"><div id="convert-progress-fill" class="dup-progress-fill"></div></div>
+  `;
   try {
     const started = await api(endpoint, {
       method: "POST",
@@ -1971,7 +1995,9 @@ async function runConvert(endpoint, body, btnEl, resultTextFn) {
       body: JSON.stringify(body),
     });
     if (started.error) {
-      setTileText(btnEl, started.error === "Already running" ? "Already running…" : "Failed");
+      el("convert-progress").classList.add("hidden");
+      el("convert-status").textContent = started.error === "Already running"
+        ? "A conversion is already running." : (started.error || "Couldn't start the conversion.");
       return;
     }
     // Each file is a real ffmpeg transcode -- runs in the background with
@@ -1979,37 +2005,39 @@ async function runConvert(endpoint, body, btnEl, resultTextFn) {
     // big batch can take minutes and a static "Converting…" the whole time
     // looks indistinguishable from stuck.
     const status = await pollProgress("/convert-tracks/progress", (s) => {
-      setTileText(btnEl, s.total ? `Converting… ${s.done}/${s.total}` : "Converting…");
+      el("convert-status").textContent = s.total ? `Converting… ${s.done}/${s.total}` : "Converting…";
+      el("convert-progress-fill").style.width = s.total ? `${Math.min(100, (s.done / s.total) * 100)}%` : "3%";
       return s.running;
     });
+    el("convert-progress").classList.add("hidden");
     if (status.error) {
-      setTileText(btnEl, "Failed");
+      el("convert-status").textContent = `Conversion failed: ${status.error}`;
       return;
     }
-    setTileText(btnEl, resultTextFn(status.results));
+    el("convert-status").textContent = resultTextFn(status.results);
   } catch (e) {
-    setTileText(btnEl, "Failed");
-  } finally {
-    setTimeout(() => { setTileText(btnEl, original); }, 4000);
-    btnEl.disabled = false;
+    el("convert-progress").classList.add("hidden");
+    el("convert-status").textContent = "Conversion failed.";
   }
 }
 
 el("convert-playlist").addEventListener("click", () => {
   if (!state.activePlaylistId) return;
-  openFormatPickerModal("Convert every track in this playlist", (fmt) => {
-    runConvert(`/playlists/${state.activePlaylistId}/convert`, { format: fmt }, el("convert-playlist"),
-      (r) => `${r.converted}/${r.total} converted`);
-  });
+  openFormatPickerModal("Convert every track in this playlist", (fmt) => ({
+    endpoint: `/playlists/${state.activePlaylistId}/convert`,
+    body: { format: fmt },
+    resultTextFn: (r) => `${r.converted}/${r.total} converted`,
+  }));
 });
 
 // Topbar "Convert" — asks what to convert (current selection, or a playlist), then format.
 el("convert-menu").addEventListener("click", async () => {
   if (state.selected.size > 0) {
-    openFormatPickerModal("Convert selected tracks", (fmt) => {
-      runConvert("/convert-tracks", { track_ids: [...state.selected], format: fmt }, el("convert-menu"),
-        (r) => { clearSelection(); return `${r.converted}/${r.total} converted`; });
-    });
+    openFormatPickerModal("Convert selected tracks", (fmt) => ({
+      endpoint: "/convert-tracks",
+      body: { track_ids: [...state.selected], format: fmt },
+      resultTextFn: (r) => { clearSelection(); return `${r.converted}/${r.total} converted`; },
+    }));
     return;
   }
 
@@ -2033,10 +2061,11 @@ el("convert-menu").addEventListener("click", async () => {
     item.addEventListener("click", () => {
       closeModal();
       const playlistId = item.dataset.id;
-      openFormatPickerModal("Convert every track in this playlist", (fmt) => {
-        runConvert(`/playlists/${playlistId}/convert`, { format: fmt }, el("convert-menu"),
-          (r) => `${r.converted}/${r.total} converted`);
-      });
+      openFormatPickerModal("Convert every track in this playlist", (fmt) => ({
+        endpoint: `/playlists/${playlistId}/convert`,
+        body: { format: fmt },
+        resultTextFn: (r) => `${r.converted}/${r.total} converted`,
+      }));
     });
   });
 });

@@ -526,6 +526,26 @@ button {
   cursor: pointer;
 }
 .modal-list-item:hover { background: var(--bg-hover); }
+.convert-dest-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.convert-dest-label { color: var(--text-dim); font-size: 12px; flex-shrink: 0; }
+.convert-dest-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
 
 .dup-panel {
   background: var(--bg-elevated);

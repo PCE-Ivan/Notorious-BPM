@@ -60,16 +60,18 @@ def _safe_component(name):
     return re.sub(r"\s{2,}", " ", name).strip() or "Unknown"
 
 
-def output_path_for(artist, title, fmt):
+def output_path_for(artist, title, fmt, output_root=None):
     info = FORMATS[fmt]
-    folder = os.path.join(OUTPUT_ROOT, info["label"])
+    folder = os.path.join(output_root or OUTPUT_ROOT, info["label"])
     os.makedirs(folder, exist_ok=True)
     fname = _safe_component(f"{artist} - {title}") + info["ext"]
     return os.path.join(folder, fname)
 
 
-def convert(src_path, artist, title, fmt):
-    """Converts src_path to the given format, writing into OUTPUT_ROOT.
+def convert(src_path, artist, title, fmt, output_root=None):
+    """Converts src_path to the given format, writing into output_root (the
+    user-configured destination -- see /api/convert/output-dir in app.py --
+    falling back to OUTPUT_ROOT if not given).
     Returns (output_path, already_existed: bool).
     Raises RuntimeError on ffmpeg failure.
     """
@@ -86,7 +88,7 @@ def convert(src_path, artist, title, fmt):
     if not os.path.isfile(src_path):
         raise RuntimeError(f"Source file not found: {src_path}")
 
-    dest = output_path_for(artist, title, fmt)
+    dest = output_path_for(artist, title, fmt, output_root)
     if os.path.isfile(dest):
         return dest, True
 
