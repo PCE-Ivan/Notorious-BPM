@@ -93,5 +93,17 @@ app = BUNDLE(
         "LSMinimumSystemVersion": "11.0",
         "LSUIElement": False,
         "NSHighResolutionCapable": True,
+        # Without these two keys, macOS silently blocks this app's Bonjour
+        # discovery -- app.js's AirPlay button (webkitShowPlaybackTargetPicker,
+        # see static/app.js) depends on WKWebView finding _airplay._tcp/
+        # _raop._tcp devices on the LAN, which never surfaces without a
+        # granted Local Network permission, and the OS never even shows that
+        # permission prompt without NSLocalNetworkUsageDescription present.
+        # The button just stays permanently hidden in the packaged .app with
+        # no error -- it works fine in a plain browser tab, which already
+        # carries this permission system-wide, which is what made this so
+        # easy to miss.
+        "NSLocalNetworkUsageDescription": "Notorious B.P.M. uses your local network to find AirPlay speakers and Apple TVs to stream music to.",
+        "NSBonjourServices": ["_airplay._tcp", "_raop._tcp"],
     },
 )

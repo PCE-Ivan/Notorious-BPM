@@ -865,15 +865,15 @@ function fitStagePanel() {
 
   if (scaling) {
     content.style.transform = `scale(${Math.min(availW / naturalW, availH / naturalH)})`;
-  } else if (state.theme === "vinyl") {
-    // Normal sidebar layout, vinyl only: never scale UP (hifi/cassette stay
-    // exactly as before -- hand-fitted to their normal width, no shrink
-    // logic) but DO shrink the turntable as one rigid unit if its natural
-    // content no longer fits the space actually available. Needed because
-    // the fader rail is sized as a real proportion of the wood panel
-    // (see .vinyl-fader-track) rather than however much happened to be
-    // left over, which can make the panel's natural height taller than a
-    // shorter window's sidebar row.
+  } else if (state.theme === "vinyl" || state.theme === "cassette") {
+    // Normal sidebar layout, vinyl/cassette only: never scale UP (hifi stays
+    // exactly as before -- hand-fitted to its normal width, no shrink
+    // logic) but DO shrink the panel as one rigid unit if its natural
+    // content no longer fits the space actually available. Both panels are
+    // wide enough (680px/470px design width) that .theme-stage's own
+    // max-width can clamp availW below that natural width on an ordinary
+    // laptop-width window -- without this, the excess just gets cropped by
+    // theme-stage's overflow-x:hidden instead of shrinking to fit inside it.
     const fitScale = Math.min(1, availW / naturalW, availH / naturalH);
     content.style.transform = fitScale < 1 ? `scale(${fitScale})` : "";
   } else {
