@@ -2951,7 +2951,12 @@ el("dup-clean-btn").addEventListener("click", async () => {
 const dupReviewState = { offset: 0, total: 0, loading: false, selected: new Set() };
 
 function dupReviewTrackMeta(t) {
-  return [t.album, t.year, t.duration ? fmtTime(t.duration) : null].filter(Boolean).join(" · ");
+  // Format first -- it's the detail that actually matters for deciding
+  // which copy to keep (a lossless FLAC/ALAC/WAV file over a lossy
+  // MP3/AAC one of the same song), where album/year/duration mostly just
+  // help tell two editions apart rather than rank them.
+  const format = t.ext ? t.ext.replace(/^\./, "").toUpperCase() : null;
+  return [format, t.album, t.year, t.duration ? fmtTime(t.duration) : null].filter(Boolean).join(" · ");
 }
 
 function updateDupReviewBulkBar() {
