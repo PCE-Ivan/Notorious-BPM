@@ -237,6 +237,11 @@ def _run_scan_bg(force_prune=False):
         importlib.reload(scan_library)
         stats = scan_library.scan(progress_cb=progress_cb, force_prune=force_prune)
         _scan_state["result"] = stats
+        # Recorded on every successful scan regardless of trigger (Rescan
+        # button, Choose Folder, or the iPod import's chained rescan) --
+        # read back by /api/last-scan so a caller can skip a redundant
+        # whole-library rescan it doesn't actually need right now.
+        jukebox_config.update_config(lambda cfg: cfg.__setitem__("last_scan_at", datetime.datetime.utcnow().isoformat()))
     except Exception as e:
         _scan_state["error"] = str(e)
     finally:
@@ -268,6 +273,24 @@ def rescan():
 @app.route("/api/scan-progress")
 def scan_progress():
     return jsonify(_scan_state)
+
+
+@app.route("/api/last-scan")
+def last_scan():
+    """When the library was last actually scanned (any trigger -- Rescan,
+    Choose Folder, or an iPod import's chained rescan), so a caller can
+    decide a fresh one isn't needed right now instead of always redoing a
+    whole-library walk that can take minutes."""
+    cfg = jukebox_config.load_config()
+    last_scan_at = cfg.get("last_scan_at")
+    seconds_ago = None
+    if last_scan_at:
+        try:
+            then = datetime.datetime.fromisoformat(last_scan_at)
+            seconds_ago = (datetime.datetime.utcnow() - then).total_seconds()
+        except ValueError:
+            last_scan_at = None
+    return jsonify({"last_scan_at": last_scan_at, "seconds_ago": seconds_ago})
 
 
 # Same async-job-with-progress-polling shape as the scan above: copying a

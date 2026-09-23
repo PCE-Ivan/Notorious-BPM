@@ -708,6 +708,13 @@
           <span class="ipod-step-text">
             <span class="ipod-step-label">Rescanning library</span>
             <span id="ipod-step-scan-detail" class="ipod-step-detail"></span>
+            <div id="ipod-skip-prompt" class="ipod-skip-prompt hidden">
+              <span id="ipod-skip-when" class="ipod-step-detail"></span>
+              <div class="ipod-skip-actions">
+                <button id="ipod-skip-yes" class="btn-secondary btn-small">Skip</button>
+                <button id="ipod-skip-no" class="btn-primary btn-small">Rescan anyway</button>
+              </div>
+            </div>
           </span>
         </li>
         <li id="ipod-step-art" class="ipod-step">
@@ -717,9 +724,20 @@
             <span id="ipod-step-art-detail" class="ipod-step-detail"></span>
           </span>
         </li>
+        <li id="ipod-step-dup" class="ipod-step">
+          <span class="ipod-step-icon">○</span>
+          <span class="ipod-step-text">
+            <span class="ipod-step-label">Scanning for duplicates</span>
+            <span id="ipod-step-dup-detail" class="ipod-step-detail"></span>
+          </span>
+        </li>
       </ul>
       <div id="ipod-progress" class="dup-progress hidden"><div id="ipod-progress-fill" class="dup-progress-fill"></div></div>
-      <p id="ipod-summary" class="dup-summary-text hidden"></p>
+      <div id="ipod-summary" class="ipod-summary hidden">
+        <p class="ipod-summary-title">Import complete</p>
+        <ul id="ipod-summary-list" class="ipod-summary-list"></ul>
+        <button id="ipod-summary-review-dups" class="btn-secondary btn-small hidden">Review duplicates</button>
+      </div>
     </div>
   </div>
 </div>

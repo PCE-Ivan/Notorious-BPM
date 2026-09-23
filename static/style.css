@@ -615,6 +615,13 @@ button {
 .ipod-step.error .ipod-step-icon { color: var(--danger); opacity: 1; }
 .ipod-step.error .ipod-step-label { color: var(--danger); }
 @keyframes ipod-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.ipod-skip-prompt { margin-top: 6px; padding: 10px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius); }
+.ipod-skip-actions { display: flex; gap: 8px; margin-top: 8px; }
+.ipod-skip-actions button { flex: 1; }
+.ipod-summary { margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--border); }
+.ipod-summary-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+.ipod-summary-list { margin: 0 0 10px; padding: 0 0 0 18px; font-size: 13px; line-height: 1.7; }
+.ipod-summary-list li::marker { color: var(--text-dim); }
 
 .dup-progress-fill {
   height: 100%;

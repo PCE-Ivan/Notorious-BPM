@@ -2186,10 +2186,45 @@ function setIpodStep(key, state, detail) {
 }
 
 function resetIpodSteps() {
-  ["detect", "copy", "scan", "art"].forEach((k) => setIpodStep(k, "pending", ""));
+  ["detect", "copy", "scan", "art", "dup"].forEach((k) => setIpodStep(k, "pending", ""));
   el("ipod-summary").classList.add("hidden");
-  el("ipod-summary").textContent = "";
+  el("ipod-summary-list").innerHTML = "";
+  el("ipod-summary-review-dups").classList.add("hidden");
+  el("ipod-skip-prompt").classList.add("hidden");
   hideIpodProgress();
+}
+
+function formatAgo(seconds) {
+  if (seconds < 90) return "less than a minute ago";
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  const hours = Math.round(mins / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
+// A rescan this recent is very unlikely to be stale enough to matter --
+// asking every single time would just be a click to dismiss on a second
+// iPod import minutes after the first one.
+const IPOD_SKIP_RESCAN_WITHIN_SECONDS = 3600;
+
+// Resolves true (skip) or false (rescan anyway) once the user picks one.
+function askSkipRescan(secondsAgo) {
+  return new Promise((resolve) => {
+    const prompt = el("ipod-skip-prompt");
+    el("ipod-skip-when").textContent = `Your library was already scanned ${formatAgo(secondsAgo)}.`;
+    prompt.classList.remove("hidden");
+    const cleanup = () => {
+      prompt.classList.add("hidden");
+      yes.removeEventListener("click", onYes);
+      no.removeEventListener("click", onNo);
+    };
+    const yes = el("ipod-skip-yes");
+    const no = el("ipod-skip-no");
+    const onYes = () => { cleanup(); resolve(true); };
+    const onNo = () => { cleanup(); resolve(false); };
+    yes.addEventListener("click", onYes);
+    no.addEventListener("click", onNo);
+  });
 }
 
 function showIpodProgress(done, total) {
@@ -2252,16 +2287,29 @@ async function runIpodImport() {
       ? `${copied} new, ${already} already in your library`
       : `${copied} new track${copied === 1 ? "" : "s"}`);
 
-    // Rescans the WHOLE library, not just the iPod's tracks -- can run for
-    // minutes on a large collection, with scan_library.py's own initial
-    // folder walk taking a while before it even knows a `total` to report.
-    setIpodStep("scan", "active", "Rescanning your whole library, not just the iPod's tracks — can take a few minutes.");
-    status = await pollProgress("/scan-progress", (s) => {
-      setIpodStep("scan", "active", s.total ? `${s.done} / ${s.total}` : "Walking your music folder…");
-      showIpodProgress(s.done, s.total);
-      return s.running;
-    });
-    setIpodStep("scan", "done", "");
+    // A rescan walks the WHOLE library, not just the iPod's tracks, and can
+    // take minutes on a large collection -- if one already ran recently
+    // (any trigger: Rescan, Choose Folder, an earlier iPod import), ask
+    // before doing it again rather than always paying that cost. Only
+    // asks when it's actually recent; an old or missing last-scan time
+    // just proceeds straight to rescanning, same as before.
+    const lastScan = await api("/last-scan");
+    let skipRescan = false;
+    if (lastScan.seconds_ago != null && lastScan.seconds_ago < IPOD_SKIP_RESCAN_WITHIN_SECONDS) {
+      setIpodStep("scan", "pending", "Waiting for you to choose…");
+      skipRescan = await askSkipRescan(lastScan.seconds_ago);
+    }
+    if (skipRescan) {
+      setIpodStep("scan", "done", `Skipped — already scanned ${formatAgo(lastScan.seconds_ago)}`);
+    } else {
+      setIpodStep("scan", "active", "Rescanning your whole library, not just the iPod's tracks — can take a few minutes.");
+      status = await pollProgress("/scan-progress", (s) => {
+        setIpodStep("scan", "active", s.total ? `${s.done} / ${s.total}` : "Walking your music folder…");
+        showIpodProgress(s.done, s.total);
+        return s.running;
+      });
+      setIpodStep("scan", "done", "");
+    }
 
     // iPod syncs frequently drop full-size embedded art even when the
     // source library had it -- best-effort backfill from Deezer for
@@ -2269,6 +2317,7 @@ async function runIpodImport() {
     // _fetch_and_cache_art in app.py, same mechanism as the per-track
     // "Fetch cover art" button).
     const copiedPaths = stats.copied_paths || [];
+    let artFetched = null, artNeeded = null;
     if (copiedPaths.length) {
       setIpodStep("art", "active", "");
       const afStarted = await api("/ipod/backfill-art", {
@@ -2283,8 +2332,10 @@ async function runIpodImport() {
           return s.running;
         });
         const afResult = afStatus.result || {};
-        setIpodStep("art", afStatus.error ? "error" : "done", afStatus.error || (afResult.needed_art
-          ? `Found art for ${afResult.fetched || 0} of ${afResult.needed_art}`
+        artFetched = afResult.fetched || 0;
+        artNeeded = afResult.needed_art || 0;
+        setIpodStep("art", afStatus.error ? "error" : "done", afStatus.error || (artNeeded
+          ? `Found art for ${artFetched} of ${artNeeded}`
           : "Every new track already had cover art"));
       } else {
         setIpodStep("art", "error", afStarted.error || "Couldn't start");
@@ -2293,14 +2344,39 @@ async function runIpodImport() {
       setIpodStep("art", "done", "Nothing new to check");
     }
 
+    // Read-only, same as opening the Duplicates panel itself would show --
+    // this never deletes anything on its own, just reports what's there so
+    // the summary below can point at it.
+    setIpodStep("dup", "active", "");
+    let dupGroups = 0, dupTracks = 0;
+    try {
+      const dupResult = await api("/duplicates?limit=1");
+      dupGroups = dupResult.total_groups || 0;
+      dupTracks = dupResult.total_tracks || 0;
+      setIpodStep("dup", "done", dupGroups
+        ? `${dupGroups} group${dupGroups === 1 ? "" : "s"} found (${dupTracks} tracks)`
+        : "No duplicates found");
+    } catch (e) {
+      setIpodStep("dup", "error", "Couldn't check");
+    }
+
     hideIpodProgress();
     await loadFacets();
     await loadTracks(true);
-    const summary = el("ipod-summary");
-    summary.textContent = already
-      ? `Done — ${copied} new track${copied === 1 ? "" : "s"} added, ${already} already in your library.`
-      : `Done — ${copied} new track${copied === 1 ? "" : "s"} added.`;
-    summary.classList.remove("hidden");
+
+    const list = el("ipod-summary-list");
+    const item = (text) => { const li = document.createElement("li"); li.textContent = text; list.appendChild(li); };
+    item(`${copied} new track${copied === 1 ? "" : "s"} added${already ? `, ${already} already in your library` : ""}`);
+    if (artNeeded) item(`Cover art found for ${artFetched} of ${artNeeded} new tracks`);
+    item(dupGroups
+      ? `${dupGroups} duplicate group${dupGroups === 1 ? "" : "s"} found in your library (${dupTracks} tracks)`
+      : "No duplicates found in your library");
+    if (dupGroups) {
+      const reviewBtn = el("ipod-summary-review-dups");
+      reviewBtn.classList.remove("hidden");
+      reviewBtn.onclick = () => { closeIpodModal(); el("find-duplicates").click(); };
+    }
+    el("ipod-summary").classList.remove("hidden");
   } catch (e) {
     hideIpodProgress();
     const active = document.querySelector(".ipod-step.active");
