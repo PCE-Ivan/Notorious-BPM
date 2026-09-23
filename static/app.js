@@ -2168,10 +2168,24 @@ el("rescan-library").addEventListener("click", () => runRescan(false));
 async function runIpodImport() {
   const btn = el("import-ipod");
   const original = getTileText(btn);
+  const originalTitle = btn.title;
   setTileText(btn, "Detecting…");
   btn.disabled = true;
+  // This POST just calls find_ipod(), which is normally near-instant --
+  // but a real Classic's spinning drive over USB occasionally makes a
+  // single file check stall for tens of seconds to a few minutes with no
+  // in-between progress to report (confirmed against a real device: the
+  // exact same call was instant most times, once took over 20s). A bare
+  // "Detecting…" sitting still that long reads as broken; this note
+  // reframes a long wait as expected instead.
+  const slowNoteTimer = setTimeout(() => {
+    setTileText(btn, "Still looking…");
+    btn.title = "iPods with a spinning drive can take a while to respond over USB, especially right after connecting.";
+  }, 5000);
   try {
     const started = await api("/ipod/import", { method: "POST" });
+    clearTimeout(slowNoteTimer);
+    btn.title = originalTitle;
     if (!started.started) {
       alert(started.error || "Couldn't start the import.");
       setTileText(btn, original);
@@ -2194,19 +2208,34 @@ async function runIpodImport() {
     // (see _run_ipod_import_bg in app.py) -- poll that too, same as
     // choose-folder does, so newly-copied tracks actually show up instead
     // of leaving the button saying "done" while the library looks
-    // unchanged until the next manual rescan.
+    // unchanged until the next manual rescan. This step rescans the WHOLE
+    // library, not just the iPod's tracks, so it can run for minutes on a
+    // large collection with only a plain "Indexing…" to show for it -- that
+    // read as a hang to a user who checked back partway through and saw no
+    // number moving yet (scan_library.py's own initial folder walk takes a
+    // while before it even knows a `total` to report). The tooltip explains
+    // what's actually happening; the label still shows real numbers the
+    // moment scan_progress has any to give.
+    btn.title = "Rescanning your whole library to confirm the import -- this can take a few minutes for a large collection.";
     status = await pollProgress("/scan-progress", (s) => {
-      setTileText(btn, s.total ? `Indexing… ${s.done}/${s.total}` : "Indexing…");
+      setTileText(btn, s.total ? `Rescanning… ${s.done}/${s.total}` : "Rescanning library…");
       showScanProgress(s.done, s.total);
       return s.running;
     });
     await loadFacets();
     await loadTracks(true);
-    setTileText(btn, `+${stats.copied || 0} track${stats.copied === 1 ? "" : "s"}`);
-    setTimeout(() => { setTileText(btn, original); }, 4000);
+    // Most runs after the first find nothing new to copy (everything's
+    // already a duplicate of something in the library) -- "+0 tracks"
+    // alone reads as "did this even do anything?", so this spells out
+    // where the other 1,680 went instead of just the delta.
+    const copied = stats.copied || 0;
+    const already = (stats.duplicate_skipped || 0) + (stats.already_imported || 0);
+    setTileText(btn, already ? `+${copied} new (${already} already in library)` : `+${copied} track${copied === 1 ? "" : "s"}`);
+    setTimeout(() => { setTileText(btn, original); btn.title = originalTitle; }, 6000);
   } catch (e) {
+    clearTimeout(slowNoteTimer);
     setTileText(btn, "Failed");
-    setTimeout(() => { setTileText(btn, original); }, 3000);
+    setTimeout(() => { setTileText(btn, original); btn.title = originalTitle; }, 3000);
   } finally {
     btn.disabled = false;
     hideScanProgress();

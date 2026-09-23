@@ -15,7 +15,6 @@ lands in the configured music folder, so this module never needs to (and
 deliberately doesn't try to) recover every metadata field mhit encodes.
 """
 import os
-import re
 import shutil
 import struct
 
@@ -132,49 +131,87 @@ def parse_itunesdb(itunesdb_path, mount):
     return tracks
 
 
-_UNSAFE_CHARS = re.compile(r'[/:\\*?"<>|]')
+# organize_by_artist.py already enforces music_dir/<Artist>/<file> as the
+# library's own on-disk layout (see its module docstring) -- reusing its
+# exact artist-folder sanitization/collision helpers instead of rolling
+# separate ones here means an iPod import lands in a shape indistinguishable
+# from anything else in the library, not a lookalike with its own rules.
+import organize_by_artist
+
+_INVALID_CHARS_RE = organize_by_artist._INVALID_CHARS_RE
 
 
 def _safe_component(s, fallback):
-    s = _UNSAFE_CHARS.sub("_", (s or "").strip())
+    s = _INVALID_CHARS_RE.sub("", (s or "")).strip().rstrip(". ")
     return s or fallback
 
 
-def import_tracks(mount, dest_dir, progress_cb=None):
-    """Copies every track this can resolve to dest_dir, named "Artist -
-    Title.ext" (never overwrites -- a matching-size destination file is
-    treated as already imported and skipped, so re-running this after a
-    partial import only copies what's missing). The source files are only
-    ever read, never modified or deleted."""
+def _default_normalize_key(artist, title):
+    """Fallback (artist, title) normalization for standalone use/testing.
+    app.py instead passes its own _normalize_dup_artist/_normalize_dup_title
+    (see the Duplicates feature) so "already in the library" here means
+    exactly what it means there -- including treating "Song (Live)" and
+    "Song" as the same song."""
+    return ((artist or "").strip().lower(), (title or "").strip().lower())
+
+
+def import_tracks(mount, music_dir, existing_keys=None, normalize_key=None, progress_cb=None):
+    """Copies every track this can resolve into music_dir, laid out exactly
+    like the rest of the library: music_dir/<Artist>/<Artist> - <Title>.ext.
+    A track whose (artist, title) -- normalized via `normalize_key`, or a
+    simple built-in fallback -- already matches something in `existing_keys`
+    is skipped outright, on the assumption it's already in the library under
+    some other file. A destination file that already exists at exactly the
+    source's size is treated as "already imported in a previous run" and
+    left alone rather than re-copied or renamed to a "(2)" sibling; anything
+    else occupying that exact name gets the same "(2)", "(3)", ... suffix
+    organize_by_artist.py itself would use. `existing_keys` is mutated as
+    tracks are accounted for, so a second song on the iPod matching one
+    already handled earlier in this same run (including two copies of the
+    same song on the iPod itself) is skipped too, not just library repeats.
+    Source files are only ever read, never modified or deleted."""
+    normalize_key = normalize_key or _default_normalize_key
+    existing_keys = set() if existing_keys is None else existing_keys
+
     itunesdb_path = os.path.join(mount, "iPod_Control", "iTunes", "iTunesDB")
     tracks = parse_itunesdb(itunesdb_path, mount)
-    os.makedirs(dest_dir, exist_ok=True)
+    os.makedirs(music_dir, exist_ok=True)
 
-    copied = 0
-    skipped = 0
-    used_names = set()
+    copied_paths = []
+    already_imported = 0
+    duplicate_skipped = 0
     total = len(tracks)
     for i, t in enumerate(tracks):
-        ext = os.path.splitext(t["real_path"])[1].lower()
-        artist = _safe_component(t["artist"], "Unknown Artist")
-        title = _safe_component(t["title"], "Untitled")
-        base = f"{artist} - {title}"
-        dest_name = base + ext
-        n = 2
-        while dest_name.lower() in used_names:
-            dest_name = f"{base} ({n}){ext}"
-            n += 1
-        used_names.add(dest_name.lower())
-        dest_path = os.path.join(dest_dir, dest_name)
-
-        src_size = os.path.getsize(t["real_path"])
-        if os.path.isfile(dest_path) and os.path.getsize(dest_path) == src_size:
-            skipped += 1
+        key = normalize_key(t["artist"], t["title"])
+        if key in existing_keys:
+            duplicate_skipped += 1
         else:
-            shutil.copy2(t["real_path"], dest_path)
-            copied += 1
+            ext = os.path.splitext(t["real_path"])[1].lower()
+            artist_label = _safe_component(t["artist"], "Unknown Artist")
+            title_label = _safe_component(t["title"], "Untitled")
+            dest_folder = os.path.join(music_dir, artist_label)
+            natural_path = os.path.join(dest_folder, f"{artist_label} - {title_label}{ext}")
+
+            src_size = os.path.getsize(t["real_path"])
+            if os.path.isfile(natural_path) and os.path.getsize(natural_path) == src_size:
+                already_imported += 1
+            else:
+                os.makedirs(dest_folder, exist_ok=True)
+                dest_path = (
+                    organize_by_artist._unique_dest_path(natural_path)
+                    if os.path.exists(natural_path) else natural_path
+                )
+                shutil.copy2(t["real_path"], dest_path)
+                copied_paths.append(os.path.relpath(dest_path, music_dir))
+            existing_keys.add(key)
 
         if progress_cb:
             progress_cb(i + 1, total)
 
-    return {"total": total, "copied": copied, "skipped": skipped}
+    return {
+        "total": total,
+        "copied": len(copied_paths),
+        "already_imported": already_imported,
+        "duplicate_skipped": duplicate_skipped,
+        "copied_paths": copied_paths,
+    }

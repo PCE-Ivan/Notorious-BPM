@@ -281,16 +281,32 @@ _ipod_state = {"running": False, "done": 0, "total": 0, "result": None, "error":
 _ipod_lock = threading.Lock()
 
 
-def _run_ipod_import_bg(mount, dest_dir):
+def _run_ipod_import_bg(mount, music_dir, existing_keys):
     def progress_cb(done, total):
         _ipod_state["done"] = done
         _ipod_state["total"] = total
 
     try:
-        import importlib
+        # No importlib.reload here (unlike scan/organize above) -- reloading
+        # this specific module (the one that also imports organize_by_artist)
+        # deadlocks in the packaged/frozen build specifically, verified
+        # against a real device: the process sits at 0% CPU indefinitely,
+        # not slow, genuinely stuck. Reload only ever existed so editing
+        # this file didn't need an app restart during development; a
+        # shipped, frozen build's code never changes at runtime anyway, so
+        # a plain import (returning the already-loaded module) loses
+        # nothing real here.
         import ipod_import
-        importlib.reload(ipod_import)
-        stats = ipod_import.import_tracks(mount, dest_dir, progress_cb=progress_cb)
+        # Same (artist, title) normalization the Duplicates feature already
+        # uses (see _normalize_dup_artist/_normalize_dup_title below) -- a
+        # song already in the library under any edition ("Live",
+        # "Remastered", a different release...) is skipped rather than
+        # imported a second time under a different file.
+        stats = ipod_import.import_tracks(
+            mount, music_dir, existing_keys=existing_keys,
+            normalize_key=lambda artist, title: (_normalize_dup_artist(artist), _normalize_dup_title(title)),
+            progress_cb=progress_cb,
+        )
         _ipod_state["result"] = stats
     except Exception as e:
         _ipod_state["error"] = str(e)
@@ -320,21 +336,21 @@ def _run_ipod_import_bg(mount, dest_dir):
         _ipod_state["running"] = False
 
 
-def _start_ipod_import_bg(mount, dest_dir):
+def _start_ipod_import_bg(mount, music_dir, existing_keys):
     """Same "already running" convention as the scan/organize jobs above."""
     with _ipod_lock:
         if _ipod_state["running"]:
             return False
         _ipod_state.update(running=True, done=0, total=0, result=None, error=None)
-        threading.Thread(target=_run_ipod_import_bg, args=(mount, dest_dir), daemon=True).start()
+        threading.Thread(target=_run_ipod_import_bg, args=(mount, music_dir, existing_keys), daemon=True).start()
         return True
 
 
 @app.route("/api/ipod/detect")
 def ipod_detect():
-    import importlib
+    # See _run_ipod_import_bg's comment -- no importlib.reload here, it
+    # deadlocks this module specifically in the packaged/frozen build.
     import ipod_import
-    importlib.reload(ipod_import)
     info = ipod_import.find_ipod()
     if not info:
         return jsonify({"found": False})
@@ -345,20 +361,108 @@ def ipod_detect():
 def ipod_import_route():
     if not MUSIC_DIR or not os.path.isdir(MUSIC_DIR):
         return jsonify({"started": False, "error": "Set a music folder first (the Folder button), then try again."})
-    import importlib
+    # See _run_ipod_import_bg's comment -- no importlib.reload here, it
+    # deadlocks this module specifically in the packaged/frozen build.
     import ipod_import
-    importlib.reload(ipod_import)
     info = ipod_import.find_ipod()
     if not info:
         return jsonify({"started": False, "error": "No iPod Classic found. Make sure it's connected and shows “Do Not Disconnect.”"})
-    dest_dir = os.path.join(MUSIC_DIR, f"iPod Import - {info['name']}")
-    started = _start_ipod_import_bg(info["mount"], dest_dir)
+    # music_dir directly, not a separate holding folder -- imported tracks
+    # land at MUSIC_DIR/<Artist>/<Artist> - <Title>.ext, the same shape
+    # organize_by_artist.py already enforces for everything else in the
+    # library, merged in rather than sitting apart from it.
+    db = get_db()
+    existing_keys = {
+        (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"]))
+        for r in db.execute("SELECT artist, title FROM tracks").fetchall()
+    }
+    started = _start_ipod_import_bg(info["mount"], MUSIC_DIR, existing_keys)
     return jsonify({"started": started, "error": None if started else "Already running"})
 
 
 @app.route("/api/ipod/import-progress")
 def ipod_import_progress():
     return jsonify(_ipod_state)
+
+
+# Runs right after the chained rescan above finishes (see runIpodImport() in
+# app.js) -- freshly-copied tracks now have real ids, but a plain scan alone
+# doesn't populate has_art (that's normally the "deep scan" tag-checker's
+# job, see tags_deep_scan/_run_deep_scan_bg above), and iPod syncs
+# frequently drop full-size embedded art to save device space even when the
+# source library had it (~70% of a real 1,717-track iPod tested here had
+# none on-device despite the library copy having it). This checks exactly
+# the tracks this import just copied and best-effort backfills art from
+# Deezer for whichever of them have none -- same _fetch_and_cache_art
+# mechanism as the per-track "Fetch cover art" button, just applied in bulk
+# with the same rate-limiting fill_genres.py already uses for the same API.
+_ipod_artfill_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
+_ipod_artfill_lock = threading.Lock()
+
+
+def _run_ipod_artfill_bg(rel_paths):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = []
+            if rel_paths:
+                placeholders = ",".join("?" * len(rel_paths))
+                rows = conn.execute(
+                    f"SELECT id, path, artist, title FROM tracks WHERE path IN ({placeholders})",
+                    rel_paths,
+                ).fetchall()
+
+            needs_art = []
+            for row in rows:
+                fpath = os.path.join(MUSIC_DIR, row["path"])
+                has_artist, has_title, has_art = (
+                    _read_raw_tag_presence(fpath) if os.path.isfile(fpath) else (True, True, True)
+                )
+                conn.execute(
+                    "UPDATE tracks SET has_artist_tag=?, has_title_tag=?, has_art=? WHERE id=?",
+                    (int(has_artist), int(has_title), int(has_art), row["id"]),
+                )
+                if not has_art:
+                    needs_art.append(row)
+            conn.commit()
+
+            fetched = 0
+            total = len(needs_art)
+            _ipod_artfill_state["total"] = total
+            for i, row in enumerate(needs_art):
+                try:
+                    ok, _err = _fetch_and_cache_art(conn, row["id"], row["artist"], row["title"])
+                    if ok:
+                        fetched += 1
+                except Exception:
+                    pass
+                _ipod_artfill_state["done"] = i + 1
+                time.sleep(0.15)  # be polite to Deezer's public API -- see fill_genres.py
+            _ipod_artfill_state["result"] = {"checked": len(rows), "needed_art": total, "fetched": fetched}
+        finally:
+            conn.close()
+    except Exception as e:
+        _ipod_artfill_state["error"] = str(e)
+    finally:
+        _ipod_artfill_state["running"] = False
+
+
+@app.route("/api/ipod/backfill-art", methods=["POST"])
+def ipod_backfill_art():
+    data = request.get_json(force=True, silent=True) or {}
+    rel_paths = data.get("paths") or []
+    with _ipod_artfill_lock:
+        if _ipod_artfill_state["running"]:
+            return jsonify({"started": False, "error": "Already running"})
+        _ipod_artfill_state.update(running=True, done=0, total=0, result=None, error=None)
+        threading.Thread(target=_run_ipod_artfill_bg, args=(rel_paths,), daemon=True).start()
+        return jsonify({"started": True, "error": None})
+
+
+@app.route("/api/ipod/backfill-art-progress")
+def ipod_backfill_art_progress():
+    return jsonify(_ipod_artfill_state)
 
 
 # Same async-job-with-progress-polling shape as the scan above: moving
@@ -1937,32 +2041,44 @@ def art(track_id):
     return resp
 
 
-@app.route("/api/art/<int:track_id>/fetch", methods=["POST"])
-def fetch_art(track_id):
+def _fetch_and_cache_art(conn, track_id, artist, title):
     """Best-effort cover art from Deezer for a track with no embedded art --
     caches straight into ART_CACHE_DIR (the same place get_art already
     checks first) without ever touching the source audio file, so a bad
-    match or a failed write can't corrupt anything."""
+    match or a failed write can't corrupt anything. `conn` just needs
+    execute()/commit() -- both the per-request g.db and a plain
+    sqlite3.connect() (used by the iPod-import art backfill, which runs
+    off a background thread with no request/g of its own) satisfy that.
+    Returns (True, None) on success, else (False, error_message) -- callers
+    doing this in bulk just check the bool and move on to the next track."""
     import fill_genres
-    db = get_db()
-    row = db.execute("SELECT artist, title FROM tracks WHERE id=?", (track_id,)).fetchone()
-    if not row:
-        abort(404)
+    # Deezer's quoted artist:"X" track:"Y" advanced-filter syntax (what
+    # this used to send) now reliably returns zero results -- verified
+    # against several well-known tracks, not something specific to any one
+    # song here -- so this uses the same plain-query + same-artist-filter
+    # approach fill_genres._pick_genre already relies on for its own Deezer
+    # search, rather than a stricter filter the API no longer honors.
     results = fill_genres._http_json(fill_genres.DEEZER_SEARCH, {
-        "q": f'artist:"{(row["artist"] or "").strip()}" track:"{(row["title"] or "").strip()}"',
-        "limit": 1,
+        "q": f'{(artist or "").strip()} {(title or "").strip()}'.strip(),
+        "limit": 5,
     })
     candidates = (results or {}).get("data") or []
-    cover_url = candidates[0].get("album", {}).get("cover_big") if candidates else None
+    artist_lower = (artist or "").strip().lower()
+    same_artist = [
+        c for c in candidates
+        if artist_lower and artist_lower in (c.get("artist", {}).get("name") or "").strip().lower()
+    ]
+    best = (same_artist or candidates or [None])[0]
+    cover_url = best.get("album", {}).get("cover_big") if best else None
     if not cover_url:
-        return jsonify({"ok": False, "error": "No match found"}), 404
+        return False, "No match found"
 
     import urllib.request
     try:
         with urllib.request.urlopen(cover_url, timeout=10) as resp:
             image_bytes = resp.read()
     except Exception:
-        return jsonify({"ok": False, "error": "Couldn't download the image"}), 502
+        return False, "Couldn't download the image"
 
     dest = os.path.join(ART_CACHE_DIR, f"{track_id}.jpg")
     with open(dest, "wb") as f:
@@ -1976,8 +2092,21 @@ def fetch_art(track_id):
     thumb_cached = os.path.join(ART_CACHE_DIR, f"{track_id}.thumb.jpg")
     if os.path.isfile(thumb_cached):
         os.remove(thumb_cached)
-    db.execute("UPDATE tracks SET has_art=1 WHERE id=?", (track_id,))
-    db.commit()
+    conn.execute("UPDATE tracks SET has_art=1 WHERE id=?", (track_id,))
+    conn.commit()
+    return True, None
+
+
+@app.route("/api/art/<int:track_id>/fetch", methods=["POST"])
+def fetch_art(track_id):
+    db = get_db()
+    row = db.execute("SELECT artist, title FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if not row:
+        abort(404)
+    ok, error = _fetch_and_cache_art(db, track_id, row["artist"], row["title"])
+    if not ok:
+        status = 404 if error == "No match found" else 502
+        return jsonify({"ok": False, "error": error}), status
     return jsonify({"ok": True, "track_id": track_id})
 
 
