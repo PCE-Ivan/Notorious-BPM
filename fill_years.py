@@ -154,8 +154,14 @@ def fix_release_years(progress_cb=None, track_ids=None):
         try:
             safe_artist = (row["artist"] or "").replace('"', "")
             safe_title = _search_title(row["title"]).replace('"', "")
+            # Deezer's quoted artist:"X" track:"Y" advanced-filter syntax
+            # reliably returns zero results now (verified against several
+            # well-known tracks, independent of anything specific to this
+            # library) -- a plain query plus _earliest_year's own same-
+            # artist filtering below finds the same matches its stricter
+            # filter was meant to.
             results = _http_json(DEEZER_SEARCH, {
-                "q": f'artist:"{safe_artist}" track:"{safe_title}"',
+                "q": f"{safe_artist} {safe_title}".strip(),
                 "limit": 5,
             })
             candidates = (results or {}).get("data") or []

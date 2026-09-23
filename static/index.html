@@ -7,6 +7,38 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="welcome-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel welcome-panel">
+    <div class="dup-panel-header">
+      <h3>Welcome to Notorious B.P.M.</h3>
+      <button id="welcome-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p class="dup-summary-text">
+        This is a local music library manager built to look and feel like real
+        hardware. A quick tour of what's here:
+      </p>
+      <ul class="welcome-list">
+        <li><b>Four player skins</b> — pick from the Theme menu up top: Hi-Fi
+          (a real VU meter), Cassette (spinning reels), Vinyl (a tracking
+          tonearm), or a clean Default/Graphite view. Switch anytime.</li>
+        <li><b>Library tools</b> in the toolbar — Tag checker, Duplicate
+          finder, Organize by Artist, and format Convert. Anything that
+          writes to disk (Organize, Convert, iPod import) is marked with a
+          subtle stripe.</li>
+        <li><b>iPod Classic import</b> — pull tracks off a connected iPod,
+          review and fix them, then move them into your library.</li>
+        <li><b>Live Radio</b> — thousands of internet stations, with
+          genre-matching and Shazam-style song ID for ones that don't report
+          what's playing.</li>
+        <li>Deletes go to <b>Trash</b>, not gone for good, and a snapshot of
+          your library is taken automatically before any bulk change.</li>
+      </ul>
+      <button id="welcome-dismiss" class="btn-primary" style="width:100%;">Got it</button>
+    </div>
+  </div>
+</div>
+
 <div class="app" id="app-root">
   <header class="topbar">
     <div class="topbar-row1">
@@ -32,7 +64,7 @@
             <div id="scan-progress" class="scan-progress hidden"><div id="scan-progress-fill" class="scan-progress-fill"></div></div>
           </div>
           <div class="topbar-divider"></div>
-          <button id="convert-menu" class="btn-secondary topbar-action-btn" title="Convert selected tracks or a whole playlist to another format">⇄ Convert</button>
+          <button id="convert-menu" class="btn-secondary topbar-action-btn tile-risky" title="Convert selected tracks or a whole playlist to another format — writes new files">⇄ Convert</button>
         </div>
       </div>
 
@@ -92,10 +124,10 @@
         <button id="find-duplicates" class="tile tile-red" title="Remove duplicate Live/Remastered/Mix versions, keeping album tracks">
           <span class="tile-icon">📑</span><span class="tile-label">Duplicates</span>
         </button>
-        <button id="organize-by-artist" class="tile tile-magenta" title="Move every file on disk into a folder named after its Artist tag">
+        <button id="organize-by-artist" class="tile tile-magenta tile-risky" title="Move every file on disk into a folder named after its Artist tag — moves real files">
           <span class="tile-icon">🗂</span><span class="tile-label">Organize</span>
         </button>
-        <button id="import-ipod" class="tile tile-teal" title="Import music from a connected iPod Classic">
+        <button id="import-ipod" class="tile tile-teal tile-risky" title="Import music from a connected iPod Classic — writes new files to your library">
           <span class="tile-icon">📥</span><span class="tile-label">iPod</span>
         </button>
       </div>
@@ -557,6 +589,29 @@
     </div>
   </div>
 </div>
+
+<!-- Separate from #modal-backdrop above -- that one already has its own
+     open/close contract (openModal/modalOkHandler) built around a single
+     text-input flow ("New playlist" etc.); a second, independent user of
+     the same DOM would fight it. This one exists purely so confirm()
+     (which every theme's OS-level dialog box ignored entirely) has a
+     themed replacement. -->
+<div id="confirm-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <h3 id="confirm-title">Are you sure?</h3>
+    <p id="confirm-message" class="dup-summary-text" style="margin:0 0 4px; white-space: pre-line;"></p>
+    <div class="modal-actions">
+      <button id="confirm-cancel" class="btn-secondary">Cancel</button>
+      <button id="confirm-ok" class="btn-primary">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- aria-live so a screen reader announces each toast as it appears --
+     see showToast() in app.js. Non-blocking and stacked, unlike the
+     modals above, so it's its own top-level container, not another
+     backdrop. -->
+<div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
 <div id="dup-backdrop" class="modal-backdrop hidden">
   <div class="dup-panel">

@@ -150,7 +150,16 @@ def _lookup_correction(row):
         return None
     safe_artist = (row["artist"] or "").replace('"', "")
     safe_title = _search_title(row["title"]).replace('"', "")
-    results = _http_json(DEEZER_SEARCH, {"q": f'artist:"{safe_artist}" track:"{safe_title}"', "limit": 5})
+    # Deezer's quoted artist:"X" track:"Y" advanced-filter syntax reliably
+    # returns zero results now (verified against several well-known
+    # tracks, independent of anything specific to this library) -- a plain
+    # query plus _pick_correction's own artist/title/duration matching
+    # below finds the same matches its stricter filter was meant to. This
+    # was very likely why "Fix artist & track names" never caught real
+    # spelling-variant duplicates like '*NSYNC' vs "'N Sync" in this
+    # library: the query behind it couldn't find anything to compare
+    # against in the first place.
+    results = _http_json(DEEZER_SEARCH, {"q": f"{safe_artist} {safe_title}".strip(), "limit": 5})
     candidates = (results or {}).get("data") or []
     match = _pick_correction(candidates, row["artist"], row["title"], row["duration"])
     if not match:

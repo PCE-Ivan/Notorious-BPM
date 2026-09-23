@@ -133,7 +133,10 @@ html, body {
    content width to fall back on, so without an explicit floor it was the
    first thing in the row to give up space to its non-shrinking siblings
    (the track count / folder path text) once the window got tight. */
-.search-wrap { position: relative; flex: 1; min-width: 140px; max-width: 480px; }
+/* 220px, not the old 140px -- that was narrower than "Search artist,
+   title, album…" needs to render without clipping at ordinary topbar
+   widths, before the window gets anywhere near actually cramped. */
+.search-wrap { position: relative; flex: 1; min-width: 220px; max-width: 480px; }
 .search {
   width: 100%;
   min-width: 0;
@@ -250,6 +253,15 @@ html, body {
 .tile-magenta { background: var(--tile-magenta); }
 .tile-red { background: var(--tile-red); }
 
+/* Organize/Convert/iPod all physically move or write files on disk, unlike
+   the read-only-until-confirmed tools next to them (Duplicates previews
+   before deleting anything; Tag/Radio never touch a file without a
+   separate explicit action) -- this stripe is the one visual difference
+   between "safe to click while exploring" and "changes things," without
+   adding a 7th tile color to the existing palette. */
+.tile-risky { box-shadow: inset 0 -3px 0 rgba(0,0,0,.4); }
+.tile-risky.topbar-action-btn { box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); }
+
 .body {
   flex: 1;
   display: flex;
@@ -323,6 +335,15 @@ html, body {
 button {
   cursor: pointer;
   font-family: inherit;
+}
+/* Every interactive control otherwise fell back to whichever default
+   focus ring the OS/WebView happens to draw -- fine on its own, but never
+   designed against any of this app's 5 themes, so it could clash with
+   (or barely show against) whichever one happens to be active. One rule,
+   reading the active theme's own --accent, fixes that everywhere at once. */
+button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .btn-secondary, .btn-small, .btn-primary {
@@ -527,6 +548,39 @@ button {
   background: var(--bg); color: var(--text);
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* Toasts -- see showToast() in app.js. Fixed, stacked, non-blocking (no
+   backdrop), unlike every .modal-backdrop above -- a toast reports
+   something that already happened, it doesn't need an answer. */
+.toast-container {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 8px; align-items: center;
+  z-index: 200; pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-dim);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.3);
+  max-width: 420px;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast-success { border-left-color: var(--tile-green); }
+.toast-error { border-left-color: var(--danger); }
+.toast-info { border-left-color: var(--accent); }
+
+.welcome-panel { width: min(480px, 92vw); }
+.welcome-list { margin: 0 0 18px; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; }
+.welcome-list b { color: var(--text); }
 .modal-list-item {
   display: flex; justify-content: space-between; padding: 8px; border-radius: var(--radius);
   cursor: pointer;
@@ -993,7 +1047,10 @@ body[data-theme="graphite"] .modal { box-shadow: 2px 2px 10px rgba(0,0,0,.6); }
   color: #fff;
   font-size: 13px;
   display: flex; align-items: center; justify-content: center;
-  opacity: .45;
+  /* Was .45 -- the one control that gets a user out of the mode built to
+     hide everything else is the wrong place to make the least visible
+     choice in the app. */
+  opacity: .75;
   transition: opacity .15s ease;
 }
 .stage-exit-btn:hover { opacity: 1; }

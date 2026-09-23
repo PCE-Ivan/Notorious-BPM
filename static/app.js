@@ -345,7 +345,7 @@ async function lookupTrackTags(t, row, btn) {
   try {
     const result = await api(`/tracks/${t.id}/lookup-tags`, { method: "POST" });
     if (result.errors && result.errors.length) {
-      alert(`Some lookups failed:\n${result.errors.join("\n")}`);
+      showToast(`Some lookups failed: ${result.errors.join(", ")}`, { kind: "error" });
     }
     Object.assign(t, result.track);
     if (state.currentTrack && state.currentTrack.id === t.id) {
@@ -577,7 +577,7 @@ audio.addEventListener("error", () => {
     4: "the file couldn't be loaded -- check the music folder is connected and this app has permission to read it",
   };
   const reason = reasons[audio.error.code] || "an unknown error occurred";
-  alert(`Couldn't play "${state.currentTrack.title || "this track"}" -- ${reason}.`);
+  showToast(`Couldn't play "${state.currentTrack.title || "this track"}" — ${reason}.`, { kind: "error" });
 });
 
 function playPrevious() {
@@ -1717,8 +1717,9 @@ function updateDeleteRatedVisibility() {
   el("delete-rated-1").classList.toggle("hidden", state.rating !== "1");
 }
 el("delete-rated-1").addEventListener("click", async () => {
-  const confirmed = confirm(
-    "Permanently delete every 1-star rated file from disk? This cannot be undone."
+  const confirmed = await customConfirm(
+    "Permanently delete every 1-star rated file from disk? This cannot be undone.",
+    { okLabel: "Delete", danger: true }
   );
   if (!confirmed) return;
   const result = await api("/delete-rated", {
@@ -1726,7 +1727,7 @@ el("delete-rated-1").addEventListener("click", async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rating: 1 }),
   });
-  alert(`Deleted ${result.deleted} file(s).${result.errors.length ? ` ${result.errors.length} failed.` : ""}`);
+  showToast(`Deleted ${result.deleted} file(s).${result.errors.length ? ` ${result.errors.length} failed.` : ""}`, { kind: result.errors.length ? "error" : "success" });
   loadFacets();
   loadTracks(true);
 });
@@ -1746,7 +1747,7 @@ async function loadPlaylists() {
     li.addEventListener("click", () => openPlaylist(p.id));
     li.querySelector(".pl-delete").addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete playlist "${p.name}"? This cannot be undone.`)) return;
+      if (!(await customConfirm(`Delete playlist "${p.name}"? This cannot be undone.`, { okLabel: "Delete", danger: true }))) return;
       await api(`/playlists/${p.id}`, { method: "DELETE" });
       if (state.activePlaylistId === p.id) {
         state.activePlaylistId = null;
@@ -1777,7 +1778,7 @@ el("back-to-library").addEventListener("click", () => {
 });
 el("delete-playlist").addEventListener("click", async () => {
   if (!state.activePlaylistId) return;
-  if (!confirm("Delete this playlist? This cannot be undone.")) return;
+  if (!(await customConfirm("Delete this playlist? This cannot be undone.", { okLabel: "Delete", danger: true }))) return;
   await api(`/playlists/${state.activePlaylistId}`, { method: "DELETE" });
   state.activePlaylistId = null;
   el("playlist-view").classList.add("hidden");
@@ -1896,7 +1897,7 @@ el("radio-mode").addEventListener("click", () => {
 
 async function startGenreRadio(genre) {
   const data = await api(`/radio?genre=${encodeURIComponent(genre)}&count=30`);
-  if (!data.tracks.length) { alert(`No tracks found in "${genre}".`); return; }
+  if (!data.tracks.length) { showToast(`No tracks found in "${genre}".`, { kind: "info" }); return; }
   state.activePlaylistId = null;
   el("library-view").classList.add("hidden");
   el("playlist-view").classList.remove("hidden");
@@ -1917,7 +1918,7 @@ async function startGenreRadio(genre) {
     await loadPlaylists();
     el("delete-playlist").textContent = "Delete playlist";
     el("delete-playlist").classList.add("danger");
-    alert("Saved!");
+    showToast("Saved!", { kind: "success" });
   };
 }
 
@@ -1928,7 +1929,7 @@ originalBackHandler.addEventListener("click", () => {
   el("delete-playlist").classList.add("danger");
   el("delete-playlist").onclick = async () => {
     if (!state.activePlaylistId) return;
-    if (!confirm("Delete this playlist? This cannot be undone.")) return;
+    if (!(await customConfirm("Delete this playlist? This cannot be undone.", { okLabel: "Delete", danger: true }))) return;
     await api(`/playlists/${state.activePlaylistId}`, { method: "DELETE" });
     state.activePlaylistId = null;
     state.activeSmartPlaylistId = null;
@@ -2107,6 +2108,131 @@ el("modal-cancel").addEventListener("click", closeModal);
 el("modal-ok").addEventListener("click", () => { if (modalOkHandler) modalOkHandler(); });
 el("modal-backdrop").addEventListener("click", (e) => { if (e.target.id === "modal-backdrop") closeModal(); });
 
+// ----------------------------------------------------------------- toast --
+// Replaces alert() for one-off messages -- non-blocking, auto-dismissing,
+// themed via the active theme's own tokens instead of the OS's plain
+// dialog box. role="status" + the container's aria-live (see index.html)
+// means a screen reader announces it without needing focus moved to it.
+function showToast(message, { kind = "info", duration = 4000 } = {}) {
+  const container = el("toast-container");
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${kind}`;
+  toast.setAttribute("role", "status");
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  let removed = false;
+  const remove = () => {
+    if (removed) return;
+    removed = true;
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 200);
+  };
+  toast.addEventListener("click", remove);
+  setTimeout(remove, duration);
+}
+
+// --------------------------------------------------------------- confirm --
+// Replaces confirm() -- same reasoning as showToast above, but a question
+// that needs an answer instead of a one-off message, so it's a real modal
+// (see #confirm-backdrop in index.html) rather than a toast. Promise-based
+// since confirm() being synchronous is exactly what made it block the
+// whole page in a way nothing else here does.
+let confirmResolve = null;
+function customConfirm(message, { okLabel = "OK", cancelLabel = "Cancel", danger = false } = {}) {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    el("confirm-message").textContent = message;
+    el("confirm-ok").textContent = okLabel;
+    el("confirm-cancel").textContent = cancelLabel;
+    el("confirm-ok").className = danger ? "danger-btn" : "btn-primary";
+    el("confirm-backdrop").classList.remove("hidden");
+  });
+}
+function resolveConfirm(value) {
+  el("confirm-backdrop").classList.add("hidden");
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  if (resolve) resolve(value);
+}
+el("confirm-ok").addEventListener("click", () => resolveConfirm(true));
+el("confirm-cancel").addEventListener("click", () => resolveConfirm(false));
+el("confirm-backdrop").addEventListener("click", (e) => { if (e.target.id === "confirm-backdrop") resolveConfirm(false); });
+
+// ------------------------------------------------------- modal accessibility --
+// Applied once per modal backdrop here instead of hand-wiring role/focus-
+// trap/Escape into each modal's own open() function separately -- every
+// modal in this app already shows/hides itself by toggling the "hidden"
+// class on its backdrop (openIpodModal, closeDupPanel, the raw
+// classList.add/remove calls scattered through this file, ...), so
+// watching for that one shared signal via MutationObserver reaches all of
+// them without touching any of those call sites.
+function makeModalAccessible(backdrop) {
+  const panel = backdrop.firstElementChild;
+  if (panel) {
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+  }
+  let lastFocused = null;
+
+  function focusablesIn(root) {
+    return [...root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter((node) => !node.disabled && node.offsetParent !== null);
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (backdrop.classList.contains("hidden")) return;
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      const closer = backdrop.querySelector('[id$="-close"], [id$="-cancel"]');
+      if (closer) closer.click();
+      else backdrop.classList.add("hidden");
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusables = focusablesIn(backdrop);
+    if (!focusables.length) return;
+    const first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+
+  new MutationObserver(() => {
+    if (!backdrop.classList.contains("hidden")) {
+      lastFocused = document.activeElement;
+      const focusables = focusablesIn(backdrop);
+      (focusables[0] || panel || backdrop).focus?.();
+    } else if (lastFocused && document.body.contains(lastFocused)) {
+      lastFocused.focus();
+      lastFocused = null;
+    }
+  }).observe(backdrop, { attributes: true, attributeFilter: ["class"] });
+}
+
+[
+  "modal-backdrop", "confirm-backdrop", "dup-backdrop", "dup-review-backdrop",
+  "tags-backdrop", "ipod-backdrop", "queue-backdrop", "trash-backdrop",
+  "stats-backdrop", "help-backdrop", "about-backdrop", "lyrics-backdrop",
+  "radio-backdrop", "export-backdrop", "smart-playlist-backdrop", "welcome-backdrop",
+].forEach((id) => { const backdrop = el(id); if (backdrop) makeModalAccessible(backdrop); });
+
+// ------------------------------------------------------------- first run --
+// Shown once (localStorage-flagged) so a brand new window isn't just an
+// unfamiliar library view with no hint that four hardware skins, an iPod
+// importer, and live radio are all sitting in the toolbar already.
+(function maybeShowWelcome() {
+  let seen = false;
+  try { seen = localStorage.getItem("jukebox-welcome-seen") === "1"; } catch (e) { /* private browsing etc -- just show it every time */ }
+  if (!seen) el("welcome-backdrop").classList.remove("hidden");
+})();
+function dismissWelcome() {
+  el("welcome-backdrop").classList.add("hidden");
+  try { localStorage.setItem("jukebox-welcome-seen", "1"); } catch (e) { /* fine to just show it again next launch */ }
+}
+el("welcome-close").addEventListener("click", dismissWelcome);
+el("welcome-dismiss").addEventListener("click", dismissWelcome);
+el("welcome-backdrop").addEventListener("click", (e) => { if (e.target.id === "welcome-backdrop") dismissWelcome(); });
+
 // --------------------------------------------------------------- rescan --
 async function runRescan(forcePrune = false) {
   const btn = el("rescan-library");
@@ -2120,7 +2246,7 @@ async function runRescan(forcePrune = false) {
       body: JSON.stringify({ force_prune: forcePrune }),
     });
     if (!started.started) {
-      alert(started.error === "Already running" ? "A scan is already running." : (started.error || "Couldn't start the scan."));
+      showToast(started.error === "Already running" ? "A scan is already running." : (started.error || "Couldn't start the scan."), { kind: "error" });
       setTileText(btn, original);
       return;
     }
@@ -2136,7 +2262,7 @@ async function runRescan(forcePrune = false) {
     });
     if (status.error) {
       setTileText(btn, "Failed");
-      alert(`Scan failed: ${status.error}`);
+      showToast(`Scan failed: ${status.error}`, { kind: "error" });
       setTimeout(() => { setTileText(btn, original); }, 3000);
       return;
     }
@@ -2150,7 +2276,7 @@ async function runRescan(forcePrune = false) {
     // look like a mass deletion) -- surface that instead of silently
     // saying nothing, with a one-click way to confirm it's expected.
     if (stats.warning) {
-      if (confirm(`${stats.warning}\n\nForce cleanup now anyway?`)) {
+      if (await customConfirm(`${stats.warning}\n\nForce cleanup now anyway?`, { okLabel: "Force cleanup", danger: true })) {
         await runRescan(true);
       }
     }
@@ -2432,7 +2558,7 @@ function renderTagIssueRow(track, key, editable) {
       } catch (e) {
         saveBtn.disabled = false;
         saveBtn.textContent = "Save";
-        alert("Couldn't save that tag.");
+        showToast("Couldn't save that tag.", { kind: "error" });
       }
     });
   }
@@ -2475,7 +2601,7 @@ async function scanTags() {
       const started = await api("/fill-genres", { method: "POST" });
       if (started.error) {
         btn.disabled = false;
-        alert(started.error === "Already running" ? "A genre lookup is already running." : started.error);
+        showToast(started.error === "Already running" ? "A genre lookup is already running." : started.error, { kind: "error" });
         return;
       }
       // Runs in the background on the server (hundreds of Deezer lookups
@@ -2491,13 +2617,13 @@ async function scanTags() {
       } catch (pollErr) {
         btn.textContent = "Auto-fill via Deezer";
         btn.disabled = false;
-        alert(pollErr.message);
+        showToast(pollErr.message, { kind: "error" });
         return;
       }
       if (status.error) {
         btn.textContent = "Auto-fill via Deezer";
         btn.disabled = false;
-        alert(`Genre lookup failed: ${status.error}`);
+        showToast(`Genre lookup failed: ${status.error}`, { kind: "error" });
         return;
       }
       const stats = status.result || {};
@@ -2524,7 +2650,7 @@ async function runDeepScan() {
   const started = await api("/tags/deep-scan", { method: "POST" });
   if (started.error) {
     btn.disabled = false;
-    if (started.error !== "Already running") alert(started.error);
+    if (started.error !== "Already running") showToast(started.error, { kind: "error" });
     else btn.textContent = "Already running…";
     return;
   }
@@ -2582,7 +2708,7 @@ el("fix-years-btn").addEventListener("click", async () => {
   const started = await api("/fill-years", { method: "POST" });
   if (started.error) {
     btn.disabled = false;
-    if (started.error !== "Already running") alert(started.error);
+    if (started.error !== "Already running") showToast(started.error, { kind: "error" });
     else resultEl.textContent = "Already running…";
     return;
   }
@@ -2626,9 +2752,10 @@ el("unify-genre-btn").addEventListener("click", async () => {
   const exampleLines = preview.examples
     .map((e) => `  ${e.artist} → ${e.genre} (${e.tracks} track(s) changing)`)
     .join("\n");
-  const confirmed = confirm(
+  const confirmed = await customConfirm(
     `This will set ${preview.artists_to_fix.toLocaleString()} artist(s) to their single most common genre, ` +
-    `updating ${preview.tracks_to_update.toLocaleString()} track(s) total (both the file's tag and the library). Biggest changes:\n\n${exampleLines}\n\nContinue?`
+    `updating ${preview.tracks_to_update.toLocaleString()} track(s) total (both the file's tag and the library). Biggest changes:\n\n${exampleLines}\n\nContinue?`,
+    { okLabel: "Continue" }
   );
   if (!confirmed) {
     btn.disabled = false;
@@ -2639,7 +2766,7 @@ el("unify-genre-btn").addEventListener("click", async () => {
   const started = await api("/unify-artist-genre", { method: "POST" });
   if (started.error) {
     btn.disabled = false;
-    if (started.error !== "Already running") alert(started.error);
+    if (started.error !== "Already running") showToast(started.error, { kind: "error" });
     else resultEl.textContent = "Already running…";
     return;
   }
@@ -2684,10 +2811,11 @@ el("fix-artist-title-btn").addEventListener("click", async () => {
     return;
   }
   const exampleLines = preview.examples.map((e) => `  ${e.before}  →  ${e.after}`).join("\n");
-  const confirmed = confirm(
+  const confirmed = await customConfirm(
     `Based on a sample of ${preview.sampled.toLocaleString()} track(s), an estimated ` +
     `${preview.estimated_fixes.toLocaleString()} of ${preview.tracks_checked.toLocaleString()} track(s) have a correction available ` +
-    `(both the file's tag and the library get updated). This is an estimate — the real run checks every track, not just the sample. Examples:\n\n${exampleLines}\n\nContinue?`
+    `(both the file's tag and the library get updated). This is an estimate — the real run checks every track, not just the sample. Examples:\n\n${exampleLines}\n\nContinue?`,
+    { okLabel: "Continue" }
   );
   if (!confirmed) {
     btn.disabled = false;
@@ -2699,7 +2827,7 @@ el("fix-artist-title-btn").addEventListener("click", async () => {
   if (started.error) {
     btn.disabled = false;
     btn.textContent = original;
-    if (started.error !== "Already running") alert(started.error);
+    if (started.error !== "Already running") showToast(started.error, { kind: "error" });
     else resultEl.textContent = "Already running…";
     return;
   }
@@ -2738,11 +2866,11 @@ el("choose-folder").addEventListener("click", async () => {
   try {
     const result = await api("/choose-folder", { method: "POST" });
     if (!result.ok) {
-      if (!result.cancelled) alert(result.error || "Couldn't set that folder.");
+      if (!result.cancelled) showToast(result.error || "Couldn't set that folder.", { kind: "error" });
       return;
     }
     if (!result.started) {
-      alert("Couldn't start the scan (one may already be running).");
+      showToast("Couldn't start the scan (one may already be running).", { kind: "error" });
       setTileText(btn, original);
       return;
     }
@@ -2767,7 +2895,7 @@ el("choose-folder").addEventListener("click", async () => {
     await loadCurrentFolder();
     if (status.error) {
       setTileText(btn, "Failed");
-      alert(`Scan failed: ${status.error}`);
+      showToast(`Scan failed: ${status.error}`, { kind: "error" });
       setTimeout(() => { setTileText(btn, original); }, 4000);
       return;
     }
@@ -2860,8 +2988,9 @@ el("dup-toggle-details").addEventListener("click", () => {
 el("dup-clean-btn").addEventListener("click", async () => {
   const preview = dupState.preview;
   if (!preview) return;
-  const confirmed = confirm(
-    `Remove ${preview.tracks_to_delete.toLocaleString()} duplicate file(s)? One copy of every song is kept — removed files go to Trash, not deleted outright.`
+  const confirmed = await customConfirm(
+    `Remove ${preview.tracks_to_delete.toLocaleString()} duplicate file(s)? One copy of every song is kept — removed files go to Trash, not deleted outright.`,
+    { okLabel: "Remove", danger: true }
   );
   if (!confirmed) return;
 
@@ -2891,7 +3020,7 @@ el("dup-clean-btn").addEventListener("click", async () => {
     progressEl.classList.add("hidden");
     el("dup-details").classList.add("hidden");
     el("dup-toggle-details").classList.remove("hidden");
-    alert(started.error === "Already running" ? "A cleanup is already running." : started.error);
+    showToast(started.error === "Already running" ? "A cleanup is already running." : started.error, { kind: "error" });
     return;
   }
 
@@ -2995,7 +3124,7 @@ function renderDupReviewGroup(group) {
       const uncheckedLeft = Array.from(list.querySelectorAll(".dup-review-track-check")).filter((c) => !c.checked).length;
       if (checkbox.checked && uncheckedLeft === 0) {
         checkbox.checked = false;
-        alert("Keep at least one copy of each song — uncheck another copy in this group first.");
+        showToast("Keep at least one copy of each song — uncheck another copy in this group first.", { kind: "info" });
         return;
       }
       if (checkbox.checked) dupReviewState.selected.add(t.id);
@@ -3004,7 +3133,7 @@ function renderDupReviewGroup(group) {
     });
     row.querySelector(".dup-review-delete-btn").addEventListener("click", async () => {
       if (list.children.length <= 1) return; // never delete the last remaining copy
-      if (!confirm(`Delete "${t.title}" (${dupReviewTrackMeta(t) || "no album info"})? Goes to Trash, not deleted outright.`)) return;
+      if (!(await customConfirm(`Delete "${t.title}" (${dupReviewTrackMeta(t) || "no album info"})? Goes to Trash, not deleted outright.`, { okLabel: "Delete", danger: true }))) return;
       await api("/delete-tracks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3032,7 +3161,7 @@ el("dup-review-delete-selected").addEventListener("click", async () => {
   const ids = Array.from(dupReviewState.selected);
   if (!ids.length) return;
   const btn = el("dup-review-delete-selected");
-  if (!confirm(`Delete ${ids.length.toLocaleString()} file(s)? Goes to Trash, not deleted outright.`)) return;
+  if (!(await customConfirm(`Delete ${ids.length.toLocaleString()} file(s)? Goes to Trash, not deleted outright.`, { okLabel: "Delete", danger: true }))) return;
   btn.disabled = true;
   btn.textContent = "Deleting…";
   try {
@@ -3119,11 +3248,12 @@ el("organize-by-artist").addEventListener("click", async () => {
   const original = getTileText(btn);
   // This physically moves files on disk (not just a DB change) -- worth a
   // real confirmation, same reasoning as the Duplicates tool's own preview
-  // step, just via a plain confirm() instead of a full modal since there's
+  // step, just via customConfirm instead of a full modal since there's
   // nothing meaningful to preview beforehand (the artist tag IS the plan).
-  const ok = confirm(
+  const ok = await customConfirm(
     "Move every music file on disk into a folder named after its Artist tag?\n\n" +
-    "Files with no artist tag go under \"Unknown Artist\". This can take a while on a large library."
+    "Files with no artist tag go under \"Unknown Artist\". This can take a while on a large library.",
+    { okLabel: "Organize" }
   );
   if (!ok) return;
 
@@ -3132,7 +3262,7 @@ el("organize-by-artist").addEventListener("click", async () => {
   try {
     const started = await api("/organize-by-artist", { method: "POST" });
     if (!started.started) {
-      alert(started.error === "Already running" ? "An organize job is already running." : (started.error || "Couldn't start."));
+      showToast(started.error === "Already running" ? "An organize job is already running." : (started.error || "Couldn't start."), { kind: "error" });
       setTileText(btn, original);
       return;
     }
@@ -3142,7 +3272,7 @@ el("organize-by-artist").addEventListener("click", async () => {
     });
     if (status.error) {
       setTileText(btn, "Failed");
-      alert(`Organize failed: ${status.error}`);
+      showToast(`Organize failed: ${status.error}`, { kind: "error" });
       setTimeout(() => { setTileText(btn, original); }, 4000);
       return;
     }
@@ -3152,7 +3282,7 @@ el("organize-by-artist").addEventListener("click", async () => {
     await loadCurrentFolder();
     setTileText(btn, `Moved ${stats.moved || 0}`);
     if (stats.error_count) {
-      alert(`Organized with ${stats.error_count} error(s) -- some files may not have been readable or writable. Check the console/log for details.`);
+      showToast(`Organized with ${stats.error_count} error(s) -- some files may not have been readable or writable. Check the console/log for details.`, { kind: "error" });
     }
     setTimeout(() => { setTileText(btn, original); }, 4000);
   } catch (e) {
@@ -3395,7 +3525,7 @@ el("lyrics-btn").addEventListener("click", async () => {
   const track = state.currentTrack;
   if (!track) return;
   if (track.isRadio && !track.hasRealMetadata) {
-    alert('Lyrics need to know the actual artist and track first -- wait for the station to report it, or use "Identify this song".');
+    showToast('Lyrics need to know the actual artist and track first — wait for the station to report it, or use "Identify this song".', { kind: "info" });
     return;
   }
   el("lyrics-title").textContent = `${track.artist || ""} — ${track.title || ""}`;
@@ -3429,7 +3559,7 @@ el("art-fetch-btn").addEventListener("click", async () => {
     el("np-art").src = `${artUrl(state.currentTrack.id, true)}&t=${Date.now()}`;
     el("np-art").classList.remove("hidden");
   } catch (e) {
-    alert("Couldn't find cover art for this track.");
+    showToast("Couldn't find cover art for this track.", { kind: "error" });
   } finally {
     btn.disabled = false;
   }
@@ -3623,17 +3753,17 @@ el("radio-identify-btn").addEventListener("click", async () => {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ acoustidApiKey: key.trim() }),
         });
-        alert("Saved -- click Identify again to try now.");
+        showToast("Saved — click Identify again to try now.", { kind: "success" });
       }
     } else if (result.error === "fpcalc_missing") {
-      alert('Song identification needs "chromaprint" installed. Run `brew install chromaprint` in Terminal, then restart the app.');
+      showToast('Song identification needs "chromaprint" installed. Run `brew install chromaprint` in Terminal, then restart the app.', { kind: "error" });
     } else if (result.error === "no_match") {
-      alert("Couldn't identify this song -- no confident match found (about 15 seconds of audio was checked).");
+      showToast("Couldn't identify this song — no confident match found (about 15 seconds of audio was checked).", { kind: "info" });
     } else {
-      alert(`Couldn't identify this song: ${result.error || "unknown error"}`);
+      showToast(`Couldn't identify this song: ${result.error || "unknown error"}`, { kind: "error" });
     }
   } catch (e) {
-    alert("Couldn't reach the identification service.");
+    showToast("Couldn't reach the identification service.", { kind: "error" });
   } finally {
     btn.disabled = false;
     btn.textContent = original;
@@ -3670,7 +3800,7 @@ function playRadioStation(station) {
   const sid = Math.random().toString(36).slice(2);
   audio.src = `${API}/radio/proxy?url=${encodeURIComponent(station.url)}&sid=${sid}`;
   audio.play().catch(() => {
-    alert(`Couldn't play "${pseudo.title}" -- the stream may be offline right now.`);
+    showToast(`Couldn't play "${pseudo.title}" — the stream may be offline right now.`, { kind: "error" });
   });
   startRadioLevelsPolling(sid);
 
@@ -3756,11 +3886,11 @@ async function renderTrash() {
         await loadTracks(true);
         renderTrash();
       } catch (e) {
-        alert("Couldn't restore that file — a file may already exist at its original location.");
+        showToast("Couldn't restore that file — a file may already exist at its original location.", { kind: "error" });
       }
     });
     row.querySelector(".trash-purge").addEventListener("click", async () => {
-      if (!confirm(`Permanently delete "${item.title || item.original_path}"? This cannot be undone.`)) return;
+      if (!(await customConfirm(`Permanently delete "${item.title || item.original_path}"? This cannot be undone.`, { okLabel: "Delete forever", danger: true }))) return;
       await api(`/trash/${item.id}`, { method: "DELETE" });
       renderTrash();
     });
@@ -3774,9 +3904,9 @@ el("open-trash").addEventListener("click", () => {
 el("trash-close").addEventListener("click", () => el("trash-backdrop").classList.add("hidden"));
 el("trash-backdrop").addEventListener("click", (e) => { if (e.target.id === "trash-backdrop") el("trash-backdrop").classList.add("hidden"); });
 el("trash-empty-btn").addEventListener("click", async () => {
-  if (!confirm("Permanently delete everything in the trash? This cannot be undone.")) return;
+  if (!(await customConfirm("Permanently delete everything in the trash? This cannot be undone.", { okLabel: "Empty trash", danger: true }))) return;
   const result = await api("/trash/empty", { method: "POST" });
-  alert(`Permanently deleted ${result.purged} file(s).`);
+  showToast(`Permanently deleted ${result.purged} file(s).`, { kind: "success" });
   renderTrash();
 });
 
@@ -3844,7 +3974,7 @@ el("export-btn").addEventListener("click", async () => {
   // which works fine there.
   if (window.pywebview && window.pywebview.api && window.pywebview.api.save_export) {
     const result = await window.pywebview.api.save_export(json);
-    if (!result.ok && !result.cancelled) alert(result.error || "Couldn't save the backup.");
+    if (!result.ok && !result.cancelled) showToast(result.error || "Couldn't save the backup.", { kind: "error" });
     return;
   }
   const blob = new Blob([json], { type: "application/json" });
@@ -3891,7 +4021,7 @@ async function loadSmartPlaylists() {
     li.addEventListener("click", () => openSmartPlaylist(p.id));
     li.querySelector(".pl-delete").addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete smart playlist "${p.name}"?`)) return;
+      if (!(await customConfirm(`Delete smart playlist "${p.name}"?`, { okLabel: "Delete", danger: true }))) return;
       await api(`/smart-playlists/${p.id}`, { method: "DELETE" });
       await loadSmartPlaylists();
     });
@@ -3911,7 +4041,7 @@ async function openSmartPlaylist(id) {
   el("delete-playlist").textContent = "Delete smart playlist";
   el("delete-playlist").classList.add("danger");
   el("delete-playlist").onclick = async () => {
-    if (!confirm(`Delete smart playlist "${data.name}"?`)) return;
+    if (!(await customConfirm(`Delete smart playlist "${data.name}"?`, { okLabel: "Delete", danger: true }))) return;
     await api(`/smart-playlists/${id}`, { method: "DELETE" });
     state.activeSmartPlaylistId = null;
     el("playlist-view").classList.add("hidden");
@@ -3930,7 +4060,7 @@ el("smart-playlist-close").addEventListener("click", () => el("smart-playlist-ba
 el("smart-playlist-backdrop").addEventListener("click", (e) => { if (e.target.id === "smart-playlist-backdrop") el("smart-playlist-backdrop").classList.add("hidden"); });
 el("smart-playlist-create-btn").addEventListener("click", async () => {
   const name = el("smart-name").value.trim();
-  if (!name) { alert("Give the playlist a name first."); return; }
+  if (!name) { showToast("Give the playlist a name first.", { kind: "info" }); return; }
   const rules = {};
   if (el("smart-rating").value) rules.rating_min = el("smart-rating").value;
   if (el("smart-genre").value) rules.genre = el("smart-genre").value;
@@ -3951,7 +4081,7 @@ el("selection-queue").addEventListener("click", () => {
   tracks.forEach((t) => state.queue.push(t));
   renderQueue();
   updateQueueBadge();
-  alert(`Added ${tracks.length} track(s) to the queue.`);
+  showToast(`Added ${tracks.length} track(s) to the queue.`, { kind: "success" });
 });
 el("selection-edit-tags").addEventListener("click", () => {
   const ids = Array.from(state.selected);
@@ -3981,7 +4111,7 @@ el("selection-edit-tags").addEventListener("click", () => {
     closeModal();
     await loadFacets();
     await loadTracks(true);
-    alert(`Applied ${applied} tag update(s).`);
+    showToast(`Applied ${applied} tag update(s).`, { kind: "success" });
   });
 });
 

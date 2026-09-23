@@ -63,7 +63,26 @@ _schema_ready = False
 def _ensure_deep_scan_columns(db):
     """Cache columns for the tag-checker's deep scan (raw artist/title/art
     presence read straight from each file) -- added lazily so existing
-    databases from before this feature don't need a manual migration."""
+    databases from before this feature don't need a manual migration.
+
+    Also the one place that guarantees the base schema exists at all
+    before this app answers a single request -- in normal desktop use
+    launcher.py runs a real scan_library.scan() right after the first-run
+    folder picker, which creates `tracks` (via scan_library.build_schema)
+    itself, so every route here has always found it already there in
+    practice. But that's true only because of that specific boot order,
+    not because anything here checks for it: any other way of starting
+    this Flask app (a test, a future boot path) hits `no such table:
+    tracks` on literally the first request. Calling scan_library's own
+    build_schema() -- the exact function scan() itself calls, language
+    column and all -- closes that gap for good instead of depending on
+    one launch script always running first, and can never drift from it
+    the way a hand-copied duplicate of the same CREATE TABLE statements
+    eventually would.
+    """
+    import scan_library
+    scan_library.build_schema(db)
+
     cols = {row[1] for row in db.execute("PRAGMA table_info(tracks)").fetchall()}
     if "has_artist_tag" not in cols:
         db.execute("ALTER TABLE tracks ADD COLUMN has_artist_tag INTEGER")
@@ -899,6 +918,9 @@ def update_tag(track_id):
     elif field == "title":
         db.execute("UPDATE tracks SET title=?, has_title_tag=1 WHERE id=?", (value, track_id))
     else:
+        # Only reachable for "album" -- the whitelist check at the top of
+        # this function is what makes interpolating `field` here safe;
+        # don't widen that whitelist without checking this stays true.
         db.execute(f"UPDATE tracks SET {field}=? WHERE id=?", (value, track_id))
     db.commit()
     if field in ("artist", "title"):
