@@ -270,6 +270,97 @@ def scan_progress():
     return jsonify(_scan_state)
 
 
+# Same async-job-with-progress-polling shape as the scan above: copying a
+# few thousand tracks off a USB-connected iPod is exactly the kind of thing
+# that can take minutes and must never block a request while it runs.
+# Classic (clickwheel) iPods only -- they mount as a plain disk and store
+# ordinary DRM-free audio files; an iPod Touch exposes no such filesystem.
+# See ipod_import.py for how a track's real name is recovered from the
+# iPod's own iTunesDB.
+_ipod_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
+_ipod_lock = threading.Lock()
+
+
+def _run_ipod_import_bg(mount, dest_dir):
+    def progress_cb(done, total):
+        _ipod_state["done"] = done
+        _ipod_state["total"] = total
+
+    try:
+        import importlib
+        import ipod_import
+        importlib.reload(ipod_import)
+        stats = ipod_import.import_tracks(mount, dest_dir, progress_cb=progress_cb)
+        _ipod_state["result"] = stats
+    except Exception as e:
+        _ipod_state["error"] = str(e)
+    finally:
+        # Chained here, before `running` flips to False, so the frontend's
+        # next poll target (/scan-progress) already shows running=True --
+        # otherwise a poll landing in the gap between the two could see
+        # neither job as running and give up a beat too early (see
+        # runIpodImport() in app.js). Gated on `total`, not `copied`: a
+        # re-run against an already-fully-imported iPod correctly copies
+        # nothing (every destination file already matches), but on a
+        # fresh/empty library those files were never scanned into it
+        # either -- skipping the rescan there would leave real files
+        # sitting in the music folder with nothing in the library to show
+        # for them. Rescanning an already-indexed folder is cheap, so
+        # there's no real cost to doing it unconditionally whenever there
+        # was anything to import at all.
+        if not _ipod_state["error"] and (_ipod_state["result"] or {}).get("total"):
+            # This runs on a bare background thread with no Flask request
+            # in flight -- _start_scan_bg's close_db(None) touches flask.g,
+            # which raises RuntimeError("Working outside of application
+            # context") without one. An explicit app context is enough to
+            # satisfy that; there's no real request to tear down here.
+            with app.app_context():
+                _snapshot_db()
+                _start_scan_bg()
+        _ipod_state["running"] = False
+
+
+def _start_ipod_import_bg(mount, dest_dir):
+    """Same "already running" convention as the scan/organize jobs above."""
+    with _ipod_lock:
+        if _ipod_state["running"]:
+            return False
+        _ipod_state.update(running=True, done=0, total=0, result=None, error=None)
+        threading.Thread(target=_run_ipod_import_bg, args=(mount, dest_dir), daemon=True).start()
+        return True
+
+
+@app.route("/api/ipod/detect")
+def ipod_detect():
+    import importlib
+    import ipod_import
+    importlib.reload(ipod_import)
+    info = ipod_import.find_ipod()
+    if not info:
+        return jsonify({"found": False})
+    return jsonify({"found": True, "name": info["name"], "track_count": info["track_count"]})
+
+
+@app.route("/api/ipod/import", methods=["POST"])
+def ipod_import_route():
+    if not MUSIC_DIR or not os.path.isdir(MUSIC_DIR):
+        return jsonify({"started": False, "error": "Set a music folder first (the Folder button), then try again."})
+    import importlib
+    import ipod_import
+    importlib.reload(ipod_import)
+    info = ipod_import.find_ipod()
+    if not info:
+        return jsonify({"started": False, "error": "No iPod Classic found. Make sure it's connected and shows “Do Not Disconnect.”"})
+    dest_dir = os.path.join(MUSIC_DIR, f"iPod Import - {info['name']}")
+    started = _start_ipod_import_bg(info["mount"], dest_dir)
+    return jsonify({"started": started, "error": None if started else "Already running"})
+
+
+@app.route("/api/ipod/import-progress")
+def ipod_import_progress():
+    return jsonify(_ipod_state)
+
+
 # Same async-job-with-progress-polling shape as the scan above: moving
 # thousands of files into per-artist folders is exactly the kind of thing
 # that can take minutes and must never block a request while it runs.

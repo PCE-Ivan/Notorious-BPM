@@ -2164,6 +2164,56 @@ async function runRescan(forcePrune = false) {
 }
 el("rescan-library").addEventListener("click", () => runRescan(false));
 
+// ------------------------------------------------------ iPod Classic import --
+async function runIpodImport() {
+  const btn = el("import-ipod");
+  const original = getTileText(btn);
+  setTileText(btn, "Detecting…");
+  btn.disabled = true;
+  try {
+    const started = await api("/ipod/import", { method: "POST" });
+    if (!started.started) {
+      alert(started.error || "Couldn't start the import.");
+      setTileText(btn, original);
+      return;
+    }
+    showScanProgress(0, 0);
+    let status = await pollProgress("/ipod/import-progress", (s) => {
+      setTileText(btn, s.total ? `Copying… ${s.done}/${s.total}` : "Copying…");
+      showScanProgress(s.done, s.total);
+      return s.running;
+    });
+    if (status.error) {
+      setTileText(btn, "Failed");
+      alert(`iPod import failed: ${status.error}`);
+      setTimeout(() => { setTileText(btn, original); }, 4000);
+      return;
+    }
+    const stats = status.result || {};
+    // The backend chains a library rescan right after copying finishes
+    // (see _run_ipod_import_bg in app.py) -- poll that too, same as
+    // choose-folder does, so newly-copied tracks actually show up instead
+    // of leaving the button saying "done" while the library looks
+    // unchanged until the next manual rescan.
+    status = await pollProgress("/scan-progress", (s) => {
+      setTileText(btn, s.total ? `Indexing… ${s.done}/${s.total}` : "Indexing…");
+      showScanProgress(s.done, s.total);
+      return s.running;
+    });
+    await loadFacets();
+    await loadTracks(true);
+    setTileText(btn, `+${stats.copied || 0} track${stats.copied === 1 ? "" : "s"}`);
+    setTimeout(() => { setTileText(btn, original); }, 4000);
+  } catch (e) {
+    setTileText(btn, "Failed");
+    setTimeout(() => { setTileText(btn, original); }, 3000);
+  } finally {
+    btn.disabled = false;
+    hideScanProgress();
+  }
+}
+el("import-ipod").addEventListener("click", runIpodImport);
+
 // -------------------------------------------------------------- tag checker --
 // Missing genre/album/year are unambiguous straight from the DB (NULL/empty
 // means the tag is actually missing -- unlike artist/title/art, which
