@@ -2165,80 +2165,148 @@ async function runRescan(forcePrune = false) {
 el("rescan-library").addEventListener("click", () => runRescan(false));
 
 // ------------------------------------------------------ iPod Classic import --
+// A checklist modal instead of squeezing everything into the tile button's
+// own label -- the whole thing (detect, copy, a whole-library rescan, art
+// backfill) can run for several minutes with long stretches where nothing
+// changes but the step really is still working, and a single small label
+// has no room to make that legible.
+const IPOD_STEP_ICON = { pending: "○", active: "⟳", done: "✓", error: "✕" };
+
+function setIpodStep(key, state, detail) {
+  const li = el(`ipod-step-${key}`);
+  if (!li) return;
+  li.classList.remove("pending", "active", "done", "error");
+  li.classList.add(state);
+  const icon = li.querySelector(".ipod-step-icon");
+  if (icon) icon.textContent = IPOD_STEP_ICON[state] || IPOD_STEP_ICON.pending;
+  if (detail !== undefined) {
+    const d = el(`ipod-step-${key}-detail`);
+    if (d) d.textContent = detail;
+  }
+}
+
+function resetIpodSteps() {
+  ["detect", "copy", "scan", "art"].forEach((k) => setIpodStep(k, "pending", ""));
+  el("ipod-summary").classList.add("hidden");
+  el("ipod-summary").textContent = "";
+  hideIpodProgress();
+}
+
+function showIpodProgress(done, total) {
+  el("ipod-progress").classList.remove("hidden");
+  el("ipod-progress-fill").style.width = total ? `${Math.min(100, (done / total) * 100)}%` : "3%";
+}
+function hideIpodProgress() {
+  el("ipod-progress").classList.add("hidden");
+  el("ipod-progress-fill").style.width = "0%";
+}
+function openIpodModal() { el("ipod-backdrop").classList.remove("hidden"); }
+function closeIpodModal() { el("ipod-backdrop").classList.add("hidden"); }
+el("ipod-close").addEventListener("click", closeIpodModal);
+el("ipod-backdrop").addEventListener("click", (e) => { if (e.target.id === "ipod-backdrop") closeIpodModal(); });
+
 async function runIpodImport() {
   const btn = el("import-ipod");
-  const original = getTileText(btn);
-  const originalTitle = btn.title;
-  setTileText(btn, "Detecting…");
   btn.disabled = true;
-  // This POST just calls find_ipod(), which is normally near-instant --
-  // but a real Classic's spinning drive over USB occasionally makes a
-  // single file check stall for tens of seconds to a few minutes with no
-  // in-between progress to report (confirmed against a real device: the
-  // exact same call was instant most times, once took over 20s). A bare
-  // "Detecting…" sitting still that long reads as broken; this note
-  // reframes a long wait as expected instead.
+  resetIpodSteps();
+  openIpodModal();
+
+  // find_ipod() is normally near-instant, but a real Classic's spinning
+  // drive over USB occasionally makes a single file check stall for tens
+  // of seconds to a few minutes with nothing else to show for it in the
+  // meantime (confirmed against a real device: the exact same call was
+  // instant most times, once took over 20s) -- this reframes a long wait
+  // as expected instead of looking stuck.
+  setIpodStep("detect", "active", "");
   const slowNoteTimer = setTimeout(() => {
-    setTileText(btn, "Still looking…");
-    btn.title = "iPods with a spinning drive can take a while to respond over USB, especially right after connecting.";
+    setIpodStep("detect", "active", "Still looking — iPods with a spinning drive can take a while to respond over USB.");
   }, 5000);
+
   try {
     const started = await api("/ipod/import", { method: "POST" });
     clearTimeout(slowNoteTimer);
-    btn.title = originalTitle;
-    if (!started.started) {
-      alert(started.error || "Couldn't start the import.");
-      setTileText(btn, original);
+    // "Already running" means a previous click's job is still going (e.g.
+    // the modal was closed and reopened) -- re-attach to it below instead
+    // of treating it as a failure.
+    if (!started.started && started.error !== "Already running") {
+      setIpodStep("detect", "error", started.error || "Couldn't find an iPod.");
       return;
     }
-    showScanProgress(0, 0);
+    setIpodStep("detect", "done", "");
+
+    setIpodStep("copy", "active", "");
+    showIpodProgress(0, 0);
     let status = await pollProgress("/ipod/import-progress", (s) => {
-      setTileText(btn, s.total ? `Copying… ${s.done}/${s.total}` : "Copying…");
-      showScanProgress(s.done, s.total);
+      setIpodStep("copy", "active", s.total ? `${s.done} / ${s.total}` : "");
+      showIpodProgress(s.done, s.total);
       return s.running;
     });
     if (status.error) {
-      setTileText(btn, "Failed");
-      alert(`iPod import failed: ${status.error}`);
-      setTimeout(() => { setTileText(btn, original); }, 4000);
+      setIpodStep("copy", "error", status.error);
       return;
     }
     const stats = status.result || {};
-    // The backend chains a library rescan right after copying finishes
-    // (see _run_ipod_import_bg in app.py) -- poll that too, same as
-    // choose-folder does, so newly-copied tracks actually show up instead
-    // of leaving the button saying "done" while the library looks
-    // unchanged until the next manual rescan. This step rescans the WHOLE
-    // library, not just the iPod's tracks, so it can run for minutes on a
-    // large collection with only a plain "Indexing…" to show for it -- that
-    // read as a hang to a user who checked back partway through and saw no
-    // number moving yet (scan_library.py's own initial folder walk takes a
-    // while before it even knows a `total` to report). The tooltip explains
-    // what's actually happening; the label still shows real numbers the
-    // moment scan_progress has any to give.
-    btn.title = "Rescanning your whole library to confirm the import -- this can take a few minutes for a large collection.";
-    status = await pollProgress("/scan-progress", (s) => {
-      setTileText(btn, s.total ? `Rescanning… ${s.done}/${s.total}` : "Rescanning library…");
-      showScanProgress(s.done, s.total);
-      return s.running;
-    });
-    await loadFacets();
-    await loadTracks(true);
-    // Most runs after the first find nothing new to copy (everything's
-    // already a duplicate of something in the library) -- "+0 tracks"
-    // alone reads as "did this even do anything?", so this spells out
-    // where the other 1,680 went instead of just the delta.
     const copied = stats.copied || 0;
     const already = (stats.duplicate_skipped || 0) + (stats.already_imported || 0);
-    setTileText(btn, already ? `+${copied} new (${already} already in library)` : `+${copied} track${copied === 1 ? "" : "s"}`);
-    setTimeout(() => { setTileText(btn, original); btn.title = originalTitle; }, 6000);
+    setIpodStep("copy", "done", already
+      ? `${copied} new, ${already} already in your library`
+      : `${copied} new track${copied === 1 ? "" : "s"}`);
+
+    // Rescans the WHOLE library, not just the iPod's tracks -- can run for
+    // minutes on a large collection, with scan_library.py's own initial
+    // folder walk taking a while before it even knows a `total` to report.
+    setIpodStep("scan", "active", "Rescanning your whole library, not just the iPod's tracks — can take a few minutes.");
+    status = await pollProgress("/scan-progress", (s) => {
+      setIpodStep("scan", "active", s.total ? `${s.done} / ${s.total}` : "Walking your music folder…");
+      showIpodProgress(s.done, s.total);
+      return s.running;
+    });
+    setIpodStep("scan", "done", "");
+
+    // iPod syncs frequently drop full-size embedded art even when the
+    // source library had it -- best-effort backfill from Deezer for
+    // exactly the tracks this import actually copied (see
+    // _fetch_and_cache_art in app.py, same mechanism as the per-track
+    // "Fetch cover art" button).
+    const copiedPaths = stats.copied_paths || [];
+    if (copiedPaths.length) {
+      setIpodStep("art", "active", "");
+      const afStarted = await api("/ipod/backfill-art", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: copiedPaths }),
+      });
+      if (afStarted.started || afStarted.error === "Already running") {
+        const afStatus = await pollProgress("/ipod/backfill-art-progress", (s) => {
+          setIpodStep("art", "active", s.total ? `${s.done} / ${s.total}` : "");
+          showIpodProgress(s.done, s.total);
+          return s.running;
+        });
+        const afResult = afStatus.result || {};
+        setIpodStep("art", afStatus.error ? "error" : "done", afStatus.error || (afResult.needed_art
+          ? `Found art for ${afResult.fetched || 0} of ${afResult.needed_art}`
+          : "Every new track already had cover art"));
+      } else {
+        setIpodStep("art", "error", afStarted.error || "Couldn't start");
+      }
+    } else {
+      setIpodStep("art", "done", "Nothing new to check");
+    }
+
+    hideIpodProgress();
+    await loadFacets();
+    await loadTracks(true);
+    const summary = el("ipod-summary");
+    summary.textContent = already
+      ? `Done — ${copied} new track${copied === 1 ? "" : "s"} added, ${already} already in your library.`
+      : `Done — ${copied} new track${copied === 1 ? "" : "s"} added.`;
+    summary.classList.remove("hidden");
   } catch (e) {
-    clearTimeout(slowNoteTimer);
-    setTileText(btn, "Failed");
-    setTimeout(() => { setTileText(btn, original); btn.title = originalTitle; }, 3000);
+    hideIpodProgress();
+    const active = document.querySelector(".ipod-step.active");
+    if (active) active.classList.replace("active", "error");
   } finally {
     btn.disabled = false;
-    hideScanProgress();
   }
 }
 el("import-ipod").addEventListener("click", runIpodImport);
