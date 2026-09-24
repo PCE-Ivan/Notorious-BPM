@@ -15,6 +15,7 @@ import datetime
 import tempfile
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.parse
 import urllib.request
@@ -614,11 +615,24 @@ def _run_ipod_artfill_bg(rel_paths):
         try:
             rows = []
             if rel_paths:
-                placeholders = ",".join("?" * len(rel_paths))
-                rows = conn.execute(
-                    f"SELECT id, path, artist, title FROM tracks WHERE path IN ({placeholders})",
-                    rel_paths,
-                ).fetchall()
+                # Not a plain "WHERE path IN (...)" -- rel_paths comes from
+                # move_staged_to_library, built from artist/title *tag*
+                # text (normally NFC-composed, e.g. accented characters as
+                # one codepoint), while the tracks.path this scan just
+                # wrote comes from os.walk() on macOS's default filesystem,
+                # which hands back names NFD-decomposed instead (the same
+                # characters as base letter + separate combining accent).
+                # Visually and case-insensitively identical, but a byte-for-
+                # byte SQL match on the raw strings misses every accented
+                # path -- confirmed against a real import where every
+                # accented track's has_art silently stayed unset. Comparing
+                # NFC-normalized forms in Python instead of in SQL makes
+                # this correct regardless of which form either side is in.
+                targets = {unicodedata.normalize("NFC", p) for p in rel_paths}
+                rows = [
+                    r for r in conn.execute("SELECT id, path, artist, title FROM tracks").fetchall()
+                    if unicodedata.normalize("NFC", r["path"]) in targets
+                ]
 
             needs_art = []
             for row in rows:
