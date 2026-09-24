@@ -2292,11 +2292,20 @@ el("rescan-library").addEventListener("click", () => runRescan(false));
 
 // ------------------------------------------------------ iPod Classic import --
 // A checklist modal instead of squeezing everything into the tile button's
-// own label -- the whole thing (detect, copy, a whole-library rescan, art
-// backfill) can run for several minutes with long stretches where nothing
-// changes but the step really is still working, and a single small label
-// has no room to make that legible.
+// own label -- the whole thing (detect, copy, review/fix, a whole-library
+// rescan, art backfill) can run for several minutes with long stretches
+// where nothing changes but the step really is still working, and a single
+// small label has no room to make that legible.
+//
+// Flow: Detect -> copy to a holding folder (MUSIC_DIR/.ipod_staging/<name>,
+// see ipod_import.py) -> Review batch (this session's own interactive
+// panel: nothing here is in the real library yet, so Fix names/tags/art
+// each write straight to the staged files) -> Move to library (chains the
+// same rescan + art-backfill the old direct-to-library flow used) ->
+// duplicate summary. Never inserted into the tracks table until moved --
+// see ipod_import.py's own module docstring for why.
 const IPOD_STEP_ICON = { pending: "○", active: "⟳", done: "✓", error: "✕" };
+const IPOD_REVIEW_MAX_SHOWN = 200; // cap DOM rows for a huge batch; the count in the heading still reflects the real total
 
 function setIpodStep(key, state, detail) {
   const li = el(`ipod-step-${key}`);
@@ -2312,7 +2321,11 @@ function setIpodStep(key, state, detail) {
 }
 
 function resetIpodSteps() {
-  ["detect", "copy", "scan", "art", "dup"].forEach((k) => setIpodStep(k, "pending", ""));
+  ["detect", "copy", "move", "scan", "art"].forEach((k) => setIpodStep(k, "pending", ""));
+  el("ipod-move-steps").classList.add("hidden");
+  el("ipod-review-panel").classList.add("hidden");
+  el("ipod-review-list").innerHTML = "";
+  el("ipod-review-action-status").textContent = "";
   el("ipod-summary").classList.add("hidden");
   el("ipod-summary-list").innerHTML = "";
   el("ipod-summary-review-dups").classList.add("hidden");
@@ -2366,6 +2379,201 @@ function closeIpodModal() { el("ipod-backdrop").classList.add("hidden"); }
 el("ipod-close").addEventListener("click", closeIpodModal);
 el("ipod-backdrop").addEventListener("click", (e) => { if (e.target.id === "ipod-backdrop") closeIpodModal(); });
 
+function ipodReviewTrackMeta(t) {
+  const format = t.ext ? t.ext.replace(/^\./, "").toUpperCase() : null;
+  return [format, t.album, t.genre, t.year, t.duration ? fmtTime(t.duration) : null].filter(Boolean).join(" · ");
+}
+
+function renderIpodReviewTrack(t) {
+  const row = document.createElement("div");
+  row.className = "dup-review-track";
+  row.innerHTML = `
+    <span class="ipod-review-track-art" title="${t.has_art ? "Has cover art" : "No cover art"}">${t.has_art ? "🖼" : "—"}</span>
+    <div class="dup-review-track-info">
+      <div class="dup-review-track-title">${escapeHtml(t.artist || "Unknown artist")} — ${escapeHtml(t.title || "")}</div>
+      <div class="dup-review-track-meta">${escapeHtml(ipodReviewTrackMeta(t))}</div>
+    </div>
+  `;
+  return row;
+}
+
+// The one active staged batch this modal is currently working with --
+// resolved once (from the import result, or from an existing pending
+// batch when resuming) and reused for every /ipod/staging/* call after.
+const ipodReviewState = { ipodName: null };
+
+async function loadIpodReviewList() {
+  const data = await api(`/ipod/staging?ipod_name=${encodeURIComponent(ipodReviewState.ipodName || "")}`);
+  const tracks = data.tracks || [];
+  const list = el("ipod-review-list");
+  list.innerHTML = "";
+  tracks.slice(0, IPOD_REVIEW_MAX_SHOWN).forEach((t) => list.appendChild(renderIpodReviewTrack(t)));
+  if (tracks.length > IPOD_REVIEW_MAX_SHOWN) {
+    const more = document.createElement("div");
+    more.className = "ipod-review-more";
+    more.textContent = `…and ${tracks.length - IPOD_REVIEW_MAX_SHOWN} more`;
+    list.appendChild(more);
+  }
+  el("ipod-review-heading").textContent = tracks.length
+    ? `${tracks.length} track${tracks.length === 1 ? "" : "s"} waiting for review — nothing here is in your library yet.`
+    : "Nothing staged to review.";
+  return tracks.length;
+}
+
+async function runIpodStagingFix(action, label) {
+  const buttons = [el("ipod-fix-names"), el("ipod-fix-tags"), el("ipod-fix-art"), el("ipod-move-to-library")];
+  buttons.forEach((b) => { b.disabled = true; });
+  const status = el("ipod-review-action-status");
+  try {
+    const started = await api("/ipod/staging/fix", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ipod_name: ipodReviewState.ipodName }),
+    });
+    if (!started.started) {
+      showToast(started.error || "Couldn't start.", { kind: "error" });
+      return;
+    }
+    const result = await pollProgress("/ipod/staging/fix-progress", (s) => {
+      status.textContent = s.total ? `${label}… ${s.done} / ${s.total}` : `${label}…`;
+      return s.running;
+    });
+    if (result.error) {
+      showToast(result.error, { kind: "error" });
+    } else {
+      const r = result.result || {};
+      showToast(
+        action === "names" ? `Fixed ${r.fixed || 0} of ${r.checked || 0} names.`
+        : action === "tags" ? `Filled ${r.fixed_genre || 0} genre and ${r.fixed_year || 0} year tag(s).`
+        : `Found art for ${r.fixed || 0} of ${r.needed_art || 0} track(s).`,
+        { kind: "success" },
+      );
+    }
+    status.textContent = "";
+    await loadIpodReviewList();
+  } finally {
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+}
+el("ipod-fix-names").addEventListener("click", () => runIpodStagingFix("names", "Fixing names"));
+el("ipod-fix-tags").addEventListener("click", () => runIpodStagingFix("tags", "Filling genre & year"));
+el("ipod-fix-art").addEventListener("click", () => runIpodStagingFix("art", "Fetching cover art"));
+
+async function moveIpodStagingToLibrary() {
+  el("ipod-review-panel").classList.add("hidden");
+  el("ipod-move-steps").classList.remove("hidden");
+
+  setIpodStep("move", "active", "");
+  showIpodProgress(0, 0);
+  const started = await api("/ipod/staging/move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ipod_name: ipodReviewState.ipodName }),
+  });
+  if (!started.started) {
+    setIpodStep("move", "error", started.error || "Couldn't start.");
+    return;
+  }
+  let status = await pollProgress("/ipod/staging/move-progress", (s) => {
+    setIpodStep("move", "active", s.total ? `${s.done} / ${s.total}` : "");
+    showIpodProgress(s.done, s.total);
+    return s.running;
+  });
+  if (status.error) {
+    setIpodStep("move", "error", status.error);
+    return;
+  }
+  const moveResult = status.result || {};
+  const moved = moveResult.total || 0;
+  const duplicates = moveResult.duplicates || [];
+  setIpodStep("move", "done", `${moved} track${moved === 1 ? "" : "s"} moved`);
+
+  // A rescan walks the WHOLE library, not just this batch, and can take
+  // minutes on a large collection -- if one already ran recently (any
+  // trigger: Rescan, Choose Folder, an earlier iPod import), ask before
+  // doing it again rather than always paying that cost. Only asks when
+  // it's actually recent; an old or missing last-scan time just proceeds
+  // straight to rescanning.
+  const lastScan = await api("/last-scan");
+  let skipRescan = false;
+  if (lastScan.seconds_ago != null && lastScan.seconds_ago < IPOD_SKIP_RESCAN_WITHIN_SECONDS) {
+    setIpodStep("scan", "pending", "Waiting for you to choose…");
+    skipRescan = await askSkipRescan(lastScan.seconds_ago);
+  }
+  if (skipRescan) {
+    setIpodStep("scan", "done", `Skipped — already scanned ${formatAgo(lastScan.seconds_ago)}`);
+  } else {
+    setIpodStep("scan", "active", "Rescanning your whole library, not just this batch — can take a few minutes.");
+    status = await pollProgress("/scan-progress", (s) => {
+      setIpodStep("scan", "active", s.total ? `${s.done} / ${s.total}` : "Walking your music folder…");
+      showIpodProgress(s.done, s.total);
+      return s.running;
+    });
+    setIpodStep("scan", "done", "");
+  }
+
+  // Safety net for anything fix_staged_art didn't catch (skipped, or
+  // failed to find a match) -- same _fetch_and_cache_art mechanism as the
+  // per-track "Fetch cover art" button.
+  const movedPaths = moveResult.moved_paths || [];
+  let artFetched = null, artNeeded = null;
+  if (movedPaths.length) {
+    setIpodStep("art", "active", "");
+    const afStarted = await api("/ipod/backfill-art", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths: movedPaths }),
+    });
+    if (afStarted.started || afStarted.error === "Already running") {
+      const afStatus = await pollProgress("/ipod/backfill-art-progress", (s) => {
+        setIpodStep("art", "active", s.total ? `${s.done} / ${s.total}` : "");
+        showIpodProgress(s.done, s.total);
+        return s.running;
+      });
+      const afResult = afStatus.result || {};
+      artFetched = afResult.fetched || 0;
+      artNeeded = afResult.needed_art || 0;
+      setIpodStep("art", afStatus.error ? "error" : "done", afStatus.error || (artNeeded
+        ? `Found art for ${artFetched} of ${artNeeded}`
+        : "Every moved track already had cover art"));
+    } else {
+      setIpodStep("art", "error", afStarted.error || "Couldn't start");
+    }
+  } else {
+    setIpodStep("art", "done", "Nothing to check");
+  }
+
+  hideIpodProgress();
+  await loadFacets();
+  await loadTracks(true);
+
+  const list = el("ipod-summary-list");
+  const item = (text) => { const li = document.createElement("li"); li.textContent = text; list.appendChild(li); };
+  item(`${moved} track${moved === 1 ? "" : "s"} added to your library`);
+  if (artNeeded) item(`Cover art found for ${artFetched} of ${artNeeded} tracks still missing it`);
+  item(duplicates.length
+    ? `${duplicates.length} track${duplicates.length === 1 ? "" : "s"} looked like something already in your library`
+    : "None of the moved tracks looked like duplicates");
+  if (duplicates.length) {
+    const reviewBtn = el("ipod-summary-review-dups");
+    reviewBtn.classList.remove("hidden");
+    reviewBtn.onclick = () => { closeIpodModal(); el("find-duplicates").click(); };
+  }
+  el("ipod-summary").classList.remove("hidden");
+}
+el("ipod-move-to-library").addEventListener("click", () => {
+  moveIpodStagingToLibrary().catch(() => {
+    showToast("Something went wrong moving the batch into your library.", { kind: "error" });
+  });
+});
+
+async function enterIpodReview(ipodName) {
+  ipodReviewState.ipodName = ipodName;
+  hideIpodProgress();
+  el("ipod-review-panel").classList.remove("hidden");
+  await loadIpodReviewList();
+}
+
 async function runIpodImport() {
   const btn = el("import-ipod");
   btn.disabled = true;
@@ -2386,6 +2594,15 @@ async function runIpodImport() {
   try {
     const started = await api("/ipod/import", { method: "POST" });
     clearTimeout(slowNoteTimer);
+    // A batch from an earlier import that was never reviewed/moved takes
+    // priority -- resume reviewing it instead of starting a second,
+    // overlapping one.
+    if (!started.started && started.pending && started.pending.length) {
+      setIpodStep("detect", "done", "");
+      setIpodStep("copy", "done", "Resuming a previous import");
+      await enterIpodReview(started.pending[0].name);
+      return;
+    }
     // "Already running" means a previous click's job is still going (e.g.
     // the modal was closed and reopened) -- re-attach to it below instead
     // of treating it as a failure.
@@ -2397,7 +2614,7 @@ async function runIpodImport() {
 
     setIpodStep("copy", "active", "");
     showIpodProgress(0, 0);
-    let status = await pollProgress("/ipod/import-progress", (s) => {
+    const status = await pollProgress("/ipod/import-progress", (s) => {
       setIpodStep("copy", "active", s.total ? `${s.done} / ${s.total}` : "");
       showIpodProgress(s.done, s.total);
       return s.running;
@@ -2408,101 +2625,12 @@ async function runIpodImport() {
     }
     const stats = status.result || {};
     const copied = stats.copied || 0;
-    const already = (stats.duplicate_skipped || 0) + (stats.already_imported || 0);
+    const already = stats.already_staged || 0;
     setIpodStep("copy", "done", already
-      ? `${copied} new, ${already} already in your library`
-      : `${copied} new track${copied === 1 ? "" : "s"}`);
+      ? `${copied} new, ${already} already staged from a previous run`
+      : `${copied} track${copied === 1 ? "" : "s"}`);
 
-    // A rescan walks the WHOLE library, not just the iPod's tracks, and can
-    // take minutes on a large collection -- if one already ran recently
-    // (any trigger: Rescan, Choose Folder, an earlier iPod import), ask
-    // before doing it again rather than always paying that cost. Only
-    // asks when it's actually recent; an old or missing last-scan time
-    // just proceeds straight to rescanning, same as before.
-    const lastScan = await api("/last-scan");
-    let skipRescan = false;
-    if (lastScan.seconds_ago != null && lastScan.seconds_ago < IPOD_SKIP_RESCAN_WITHIN_SECONDS) {
-      setIpodStep("scan", "pending", "Waiting for you to choose…");
-      skipRescan = await askSkipRescan(lastScan.seconds_ago);
-    }
-    if (skipRescan) {
-      setIpodStep("scan", "done", `Skipped — already scanned ${formatAgo(lastScan.seconds_ago)}`);
-    } else {
-      setIpodStep("scan", "active", "Rescanning your whole library, not just the iPod's tracks — can take a few minutes.");
-      status = await pollProgress("/scan-progress", (s) => {
-        setIpodStep("scan", "active", s.total ? `${s.done} / ${s.total}` : "Walking your music folder…");
-        showIpodProgress(s.done, s.total);
-        return s.running;
-      });
-      setIpodStep("scan", "done", "");
-    }
-
-    // iPod syncs frequently drop full-size embedded art even when the
-    // source library had it -- best-effort backfill from Deezer for
-    // exactly the tracks this import actually copied (see
-    // _fetch_and_cache_art in app.py, same mechanism as the per-track
-    // "Fetch cover art" button).
-    const copiedPaths = stats.copied_paths || [];
-    let artFetched = null, artNeeded = null;
-    if (copiedPaths.length) {
-      setIpodStep("art", "active", "");
-      const afStarted = await api("/ipod/backfill-art", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paths: copiedPaths }),
-      });
-      if (afStarted.started || afStarted.error === "Already running") {
-        const afStatus = await pollProgress("/ipod/backfill-art-progress", (s) => {
-          setIpodStep("art", "active", s.total ? `${s.done} / ${s.total}` : "");
-          showIpodProgress(s.done, s.total);
-          return s.running;
-        });
-        const afResult = afStatus.result || {};
-        artFetched = afResult.fetched || 0;
-        artNeeded = afResult.needed_art || 0;
-        setIpodStep("art", afStatus.error ? "error" : "done", afStatus.error || (artNeeded
-          ? `Found art for ${artFetched} of ${artNeeded}`
-          : "Every new track already had cover art"));
-      } else {
-        setIpodStep("art", "error", afStarted.error || "Couldn't start");
-      }
-    } else {
-      setIpodStep("art", "done", "Nothing new to check");
-    }
-
-    // Read-only, same as opening the Duplicates panel itself would show --
-    // this never deletes anything on its own, just reports what's there so
-    // the summary below can point at it.
-    setIpodStep("dup", "active", "");
-    let dupGroups = 0, dupTracks = 0;
-    try {
-      const dupResult = await api("/duplicates?limit=1");
-      dupGroups = dupResult.total_groups || 0;
-      dupTracks = dupResult.total_tracks || 0;
-      setIpodStep("dup", "done", dupGroups
-        ? `${dupGroups} group${dupGroups === 1 ? "" : "s"} found (${dupTracks} tracks)`
-        : "No duplicates found");
-    } catch (e) {
-      setIpodStep("dup", "error", "Couldn't check");
-    }
-
-    hideIpodProgress();
-    await loadFacets();
-    await loadTracks(true);
-
-    const list = el("ipod-summary-list");
-    const item = (text) => { const li = document.createElement("li"); li.textContent = text; list.appendChild(li); };
-    item(`${copied} new track${copied === 1 ? "" : "s"} added${already ? `, ${already} already in your library` : ""}`);
-    if (artNeeded) item(`Cover art found for ${artFetched} of ${artNeeded} new tracks`);
-    item(dupGroups
-      ? `${dupGroups} duplicate group${dupGroups === 1 ? "" : "s"} found in your library (${dupTracks} tracks)`
-      : "No duplicates found in your library");
-    if (dupGroups) {
-      const reviewBtn = el("ipod-summary-review-dups");
-      reviewBtn.classList.remove("hidden");
-      reviewBtn.onclick = () => { closeIpodModal(); el("find-duplicates").click(); };
-    }
-    el("ipod-summary").classList.remove("hidden");
+    await enterIpodReview(stats.ipod_name);
   } catch (e) {
     hideIpodProgress();
     const active = document.querySelector(".ipod-step.active");

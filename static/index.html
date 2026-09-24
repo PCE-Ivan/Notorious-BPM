@@ -738,7 +738,7 @@
 </div>
 
 <div id="ipod-backdrop" class="modal-backdrop hidden">
-  <div class="dup-panel">
+  <div class="dup-panel ipod-panel">
     <div class="dup-panel-header">
       <h3>Import from iPod</h3>
       <button id="ipod-close" class="btn-icon" title="Close">✕</button>
@@ -755,8 +755,37 @@
         <li id="ipod-step-copy" class="ipod-step">
           <span class="ipod-step-icon">○</span>
           <span class="ipod-step-text">
-            <span class="ipod-step-label">Copying new tracks</span>
+            <span class="ipod-step-label">Copying to a holding folder</span>
             <span id="ipod-step-copy-detail" class="ipod-step-detail"></span>
+          </span>
+        </li>
+      </ul>
+      <div id="ipod-progress" class="dup-progress hidden"><div id="ipod-progress-fill" class="dup-progress-fill"></div></div>
+
+      <!-- Shown once copying finishes (or immediately when resuming a batch
+           left over from an earlier, not-yet-finished import): nothing here
+           is in the real library yet, so every fix below writes straight to
+           the staged files, and nothing moves until "Move to library". -->
+      <div id="ipod-review-panel" class="ipod-review-panel hidden">
+        <p id="ipod-review-heading" class="ipod-review-heading"></p>
+        <div class="ipod-review-actions">
+          <button id="ipod-fix-names" class="btn-secondary btn-small">Fix names</button>
+          <button id="ipod-fix-tags" class="btn-secondary btn-small">Fix genre &amp; year</button>
+          <button id="ipod-fix-art" class="btn-secondary btn-small">Fix cover art</button>
+          <span id="ipod-review-action-status" class="ipod-step-detail"></span>
+        </div>
+        <div id="ipod-review-list" class="dup-review-list ipod-review-list"></div>
+        <div class="ipod-review-footer">
+          <button id="ipod-move-to-library" class="btn-primary">Move to library</button>
+        </div>
+      </div>
+
+      <ul id="ipod-move-steps" class="ipod-steps hidden">
+        <li id="ipod-step-move" class="ipod-step">
+          <span class="ipod-step-icon">○</span>
+          <span class="ipod-step-text">
+            <span class="ipod-step-label">Moving into your library</span>
+            <span id="ipod-step-move-detail" class="ipod-step-detail"></span>
           </span>
         </li>
         <li id="ipod-step-scan" class="ipod-step">
@@ -776,19 +805,11 @@
         <li id="ipod-step-art" class="ipod-step">
           <span class="ipod-step-icon">○</span>
           <span class="ipod-step-text">
-            <span class="ipod-step-label">Fetching missing cover art</span>
+            <span class="ipod-step-label">Fetching any still-missing cover art</span>
             <span id="ipod-step-art-detail" class="ipod-step-detail"></span>
           </span>
         </li>
-        <li id="ipod-step-dup" class="ipod-step">
-          <span class="ipod-step-icon">○</span>
-          <span class="ipod-step-text">
-            <span class="ipod-step-label">Scanning for duplicates</span>
-            <span id="ipod-step-dup-detail" class="ipod-step-detail"></span>
-          </span>
-        </li>
       </ul>
-      <div id="ipod-progress" class="dup-progress hidden"><div id="ipod-progress-fill" class="dup-progress-fill"></div></div>
       <div id="ipod-summary" class="ipod-summary hidden">
         <p class="ipod-summary-title">Import complete</p>
         <ul id="ipod-summary-list" class="ipod-summary-list"></ul>

@@ -188,7 +188,16 @@ def scan(progress_cb=None, force_prune=False):
     seen_paths = set()
 
     candidates = []  # (fpath, rel, root, fname)
-    for root, _dirs, files in os.walk(MUSIC_DIR):
+    for root, dirs, files in os.walk(MUSIC_DIR):
+        # A staged-but-not-yet-reviewed iPod import lives in
+        # MUSIC_DIR/.ipod_staging (see ipod_import.STAGING_DIRNAME --
+        # duplicated as a literal here rather than imported, since
+        # ipod_import already imports organize_by_artist, which imports
+        # this module; importing ipod_import from here would be circular).
+        # Pruned only at the top level a Rescan never walks into it and
+        # adds an unreviewed batch to the real library by accident.
+        if root == MUSIC_DIR:
+            dirs[:] = [d for d in dirs if d != ".ipod_staging"]
         for fname in files:
             ext = os.path.splitext(fname)[1].lower()
             if ext not in EXTS or not _is_real_audio_file(fname):

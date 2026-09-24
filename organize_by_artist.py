@@ -62,7 +62,12 @@ def organize(progress_cb=None):
         raise RuntimeError(f"Music directory not set or not found: {MUSIC_DIR}")
 
     files_to_check = []
-    for root, _dirs, files in os.walk(MUSIC_DIR):
+    for root, dirs, files in os.walk(MUSIC_DIR):
+        # Same exclusion as scan_library.py's own walk -- a staged-but-not-
+        # yet-reviewed iPod import (MUSIC_DIR/.ipod_staging) has its own
+        # artist-folder layout already; Organize should never reach into it.
+        if root == MUSIC_DIR:
+            dirs[:] = [d for d in dirs if d != ".ipod_staging"]
         for fname in files:
             if os.path.splitext(fname)[1].lower() in EXTS:
                 files_to_check.append(os.path.join(root, fname))

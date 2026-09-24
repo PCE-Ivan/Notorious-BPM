@@ -677,6 +677,15 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
 .ipod-summary-list { margin: 0 0 10px; padding: 0 0 0 18px; font-size: 13px; line-height: 1.7; }
 .ipod-summary-list li::marker { color: var(--text-dim); }
 
+.ipod-panel { width: min(720px, 94vw); }
+.ipod-review-panel { margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--border); }
+.ipod-review-heading { margin: 0 0 10px; font-size: 13px; color: var(--text-dim); }
+.ipod-review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ipod-review-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 10px; margin-bottom: 12px; }
+.ipod-review-track-art { flex-shrink: 0; font-size: 11px; color: var(--text-dim); width: 16px; text-align: center; }
+.ipod-review-more { text-align: center; font-size: 12px; color: var(--text-dim); padding: 8px 0 2px; }
+.ipod-review-footer { display: flex; justify-content: flex-end; }
+
 .dup-progress-fill {
   height: 100%;
   width: 0%;

@@ -312,18 +312,24 @@ def last_scan():
     return jsonify({"last_scan_at": last_scan_at, "seconds_ago": seconds_ago})
 
 
-# Same async-job-with-progress-polling shape as the scan above: copying a
-# few thousand tracks off a USB-connected iPod is exactly the kind of thing
-# that can take minutes and must never block a request while it runs.
-# Classic (clickwheel) iPods only -- they mount as a plain disk and store
-# ordinary DRM-free audio files; an iPod Touch exposes no such filesystem.
-# See ipod_import.py for how a track's real name is recovered from the
-# iPod's own iTunesDB.
-_ipod_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
+# iPod import flow: copy to a holding folder first (ipod_import.STAGING_DIRNAME,
+# under MUSIC_DIR so the eventual move to the library is a fast same-volume
+# rename, not a slow cross-device copy) -- then the user reviews the batch,
+# optionally fixes names/tags/art in place, and only then moves it into the
+# real library as a separate explicit step. Staged tracks are never inserted
+# into the tracks table (see ipod_import.py's own module docstring for why);
+# every route below reads/writes the staged files directly. Same async-job-
+# with-progress-polling shape as the scan above throughout, since each of
+# these steps can take minutes over a few thousand tracks and must never
+# block a request while running. Classic (clickwheel) iPods only -- they
+# mount as a plain disk and store ordinary DRM-free audio files; an iPod
+# Touch exposes no such filesystem. See ipod_import.py for how a track's
+# real name is recovered from the iPod's own iTunesDB.
+_ipod_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None, "ipod_name": None}
 _ipod_lock = threading.Lock()
 
 
-def _run_ipod_import_bg(mount, music_dir, existing_keys):
+def _run_ipod_import_bg(mount, ipod_name, staging_root):
     def progress_cb(done, total):
         _ipod_state["done"] = done
         _ipod_state["total"] = total
@@ -339,52 +345,22 @@ def _run_ipod_import_bg(mount, music_dir, existing_keys):
         # a plain import (returning the already-loaded module) loses
         # nothing real here.
         import ipod_import
-        # Same (artist, title) normalization the Duplicates feature already
-        # uses (see _normalize_dup_artist/_normalize_dup_title below) -- a
-        # song already in the library under any edition ("Live",
-        # "Remastered", a different release...) is skipped rather than
-        # imported a second time under a different file.
-        stats = ipod_import.import_tracks(
-            mount, music_dir, existing_keys=existing_keys,
-            normalize_key=lambda artist, title: (_normalize_dup_artist(artist), _normalize_dup_title(title)),
-            progress_cb=progress_cb,
-        )
+        stats = ipod_import.import_tracks(mount, staging_root, progress_cb=progress_cb)
+        stats["ipod_name"] = ipod_name
         _ipod_state["result"] = stats
     except Exception as e:
         _ipod_state["error"] = str(e)
     finally:
-        # Chained here, before `running` flips to False, so the frontend's
-        # next poll target (/scan-progress) already shows running=True --
-        # otherwise a poll landing in the gap between the two could see
-        # neither job as running and give up a beat too early (see
-        # runIpodImport() in app.js). Gated on `total`, not `copied`: a
-        # re-run against an already-fully-imported iPod correctly copies
-        # nothing (every destination file already matches), but on a
-        # fresh/empty library those files were never scanned into it
-        # either -- skipping the rescan there would leave real files
-        # sitting in the music folder with nothing in the library to show
-        # for them. Rescanning an already-indexed folder is cheap, so
-        # there's no real cost to doing it unconditionally whenever there
-        # was anything to import at all.
-        if not _ipod_state["error"] and (_ipod_state["result"] or {}).get("total"):
-            # This runs on a bare background thread with no Flask request
-            # in flight -- _start_scan_bg's close_db(None) touches flask.g,
-            # which raises RuntimeError("Working outside of application
-            # context") without one. An explicit app context is enough to
-            # satisfy that; there's no real request to tear down here.
-            with app.app_context():
-                _snapshot_db()
-                _start_scan_bg()
         _ipod_state["running"] = False
 
 
-def _start_ipod_import_bg(mount, music_dir, existing_keys):
+def _start_ipod_import_bg(mount, ipod_name, staging_root):
     """Same "already running" convention as the scan/organize jobs above."""
     with _ipod_lock:
         if _ipod_state["running"]:
             return False
-        _ipod_state.update(running=True, done=0, total=0, result=None, error=None)
-        threading.Thread(target=_run_ipod_import_bg, args=(mount, music_dir, existing_keys), daemon=True).start()
+        _ipod_state.update(running=True, done=0, total=0, result=None, error=None, ipod_name=ipod_name)
+        threading.Thread(target=_run_ipod_import_bg, args=(mount, ipod_name, staging_root), daemon=True).start()
         return True
 
 
@@ -394,9 +370,11 @@ def ipod_detect():
     # deadlocks this module specifically in the packaged/frozen build.
     import ipod_import
     info = ipod_import.find_ipod()
-    if not info:
-        return jsonify({"found": False})
-    return jsonify({"found": True, "name": info["name"], "track_count": info["track_count"]})
+    pending = ipod_import.list_pending_batches(MUSIC_DIR) if MUSIC_DIR and os.path.isdir(MUSIC_DIR) else []
+    resp = {"found": False, "pending": pending}
+    if info:
+        resp.update(found=True, name=info["name"], track_count=info["track_count"])
+    return jsonify(resp)
 
 
 @app.route("/api/ipod/import", methods=["POST"])
@@ -406,19 +384,25 @@ def ipod_import_route():
     # See _run_ipod_import_bg's comment -- no importlib.reload here, it
     # deadlocks this module specifically in the packaged/frozen build.
     import ipod_import
+    # A copy already in flight (e.g. the modal was closed and reopened)
+    # re-attaches to it below instead -- checked before the on-disk pending
+    # check right after, since a copy that's still running has already
+    # written some, but not all, of its files into the staging folder, and
+    # that partial folder must never be mistaken for a completed batch
+    # that's just waiting for review.
+    if _ipod_state["running"]:
+        return jsonify({"started": False, "error": "Already running"})
+    # A batch from an earlier import that was never reviewed/moved takes
+    # priority over starting a new, overlapping one -- the frontend offers
+    # to resume that review instead (see runIpodImport() in app.js).
+    pending = ipod_import.list_pending_batches(MUSIC_DIR)
+    if pending:
+        return jsonify({"started": False, "error": "A previous import is already staged and waiting for review.", "pending": pending})
     info = ipod_import.find_ipod()
     if not info:
         return jsonify({"started": False, "error": "No iPod Classic found. Make sure it's connected and shows “Do Not Disconnect.”"})
-    # music_dir directly, not a separate holding folder -- imported tracks
-    # land at MUSIC_DIR/<Artist>/<Artist> - <Title>.ext, the same shape
-    # organize_by_artist.py already enforces for everything else in the
-    # library, merged in rather than sitting apart from it.
-    db = get_db()
-    existing_keys = {
-        (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"]))
-        for r in db.execute("SELECT artist, title FROM tracks").fetchall()
-    }
-    started = _start_ipod_import_bg(info["mount"], MUSIC_DIR, existing_keys)
+    staging_root = ipod_import.staging_root_for(MUSIC_DIR, info["name"])
+    started = _start_ipod_import_bg(info["mount"], info["name"], staging_root)
     return jsonify({"started": started, "error": None if started else "Already running"})
 
 
@@ -427,17 +411,162 @@ def ipod_import_progress():
     return jsonify(_ipod_state)
 
 
-# Runs right after the chained rescan above finishes (see runIpodImport() in
-# app.js) -- freshly-copied tracks now have real ids, but a plain scan alone
+def _resolve_staging_root(ipod_name):
+    """Every /api/ipod/staging/* route below acts on "the" currently staged
+    batch. A caller normally doesn't need to say which one -- there's only
+    ever one in practice -- so this falls back from an explicit ipod_name,
+    to whichever import this server process itself just ran, to whatever's
+    simply sitting on disk (covers resuming a review after an app restart)."""
+    import ipod_import
+    name = ipod_name or _ipod_state.get("ipod_name")
+    if not name:
+        pending = ipod_import.list_pending_batches(MUSIC_DIR) if MUSIC_DIR and os.path.isdir(MUSIC_DIR) else []
+        if not pending:
+            return None, None
+        name = pending[0]["name"]
+    return name, ipod_import.staging_root_for(MUSIC_DIR, name)
+
+
+@app.route("/api/ipod/staging")
+def ipod_staging_list():
+    """The review screen's data source -- reads tags straight off the
+    staged files (no tracks-table rows exist for them yet)."""
+    import ipod_import
+    name, staging_root = _resolve_staging_root(request.args.get("ipod_name"))
+    if not staging_root or not os.path.isdir(staging_root):
+        return jsonify({"ipod_name": name, "tracks": []})
+    return jsonify({"ipod_name": name, "tracks": ipod_import.list_staged_tracks(staging_root)})
+
+
+# One shared async-job shape for the three in-place staging fixes (names/
+# tags/art) -- parameterized on which ipod_import function to run, rather
+# than copy-pasting the same thread-launcher three times.
+_staging_fix_state = {"running": False, "action": None, "done": 0, "total": 0, "result": None, "error": None}
+_staging_fix_lock = threading.Lock()
+
+_STAGING_FIX_FUNCS = {
+    "names": "fix_staged_names",
+    "tags": "fix_staged_tags",
+    "art": "fix_staged_art",
+}
+
+
+def _run_staging_fix_bg(action, staging_root):
+    def progress_cb(done, total):
+        _staging_fix_state["done"] = done
+        _staging_fix_state["total"] = total
+
+    try:
+        import ipod_import
+        func = getattr(ipod_import, _STAGING_FIX_FUNCS[action])
+        _staging_fix_state["result"] = func(staging_root, progress_cb=progress_cb)
+    except Exception as e:
+        _staging_fix_state["error"] = str(e)
+    finally:
+        _staging_fix_state["running"] = False
+
+
+@app.route("/api/ipod/staging/fix", methods=["POST"])
+def ipod_staging_fix():
+    data = request.get_json(force=True, silent=True) or {}
+    action = data.get("action")
+    if action not in _STAGING_FIX_FUNCS:
+        return jsonify({"started": False, "error": "Unknown fix action"})
+    _name, staging_root = _resolve_staging_root(data.get("ipod_name"))
+    if not staging_root or not os.path.isdir(staging_root):
+        return jsonify({"started": False, "error": "No staged import to fix"})
+    with _staging_fix_lock:
+        if _staging_fix_state["running"]:
+            return jsonify({"started": False, "error": "Already running"})
+        _staging_fix_state.update(running=True, action=action, done=0, total=0, result=None, error=None)
+        threading.Thread(target=_run_staging_fix_bg, args=(action, staging_root), daemon=True).start()
+        return jsonify({"started": True, "error": None})
+
+
+@app.route("/api/ipod/staging/fix-progress")
+def ipod_staging_fix_progress():
+    return jsonify(_staging_fix_state)
+
+
+# Moving the reviewed batch into the real library -- chains the same rescan
+# + art-backfill the old direct-to-library import used to run right after
+# copying, since the moved tracks need real tracks-table rows (and has_art
+# flags) exactly the way any other newly-added file does. Duplicate
+# checking against the real library happens here, at move time, purely to
+# report -- see ipod_import.move_staged_to_library's own docstring for why
+# nothing gets held back or skipped over it.
+_staging_move_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
+_staging_move_lock = threading.Lock()
+
+
+def _run_staging_move_bg(staging_root):
+    def progress_cb(done, total):
+        _staging_move_state["done"] = done
+        _staging_move_state["total"] = total
+
+    try:
+        import ipod_import
+        with app.app_context():
+            db = get_db()
+            existing_keys = {
+                (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"]))
+                for r in db.execute("SELECT artist, title FROM tracks").fetchall()
+            }
+        result = ipod_import.move_staged_to_library(
+            staging_root, MUSIC_DIR, existing_keys=existing_keys,
+            normalize_key=lambda artist, title: (_normalize_dup_artist(artist), _normalize_dup_title(title)),
+            progress_cb=progress_cb,
+        )
+        _staging_move_state["result"] = result
+    except Exception as e:
+        _staging_move_state["error"] = str(e)
+    finally:
+        # Gated on `total`, not the moved count, for the same reason the old
+        # direct-import flow gated its own chained rescan this way: even a
+        # batch that moves nothing new still needs a rescan the first time,
+        # so real files on disk end up with tracks-table rows to show for
+        # them. Rescanning an already-indexed folder is cheap either way.
+        if not _staging_move_state["error"] and (_staging_move_state["result"] or {}).get("total"):
+            # This runs on a bare background thread with no Flask request in
+            # flight -- _start_scan_bg's close_db(None) touches flask.g,
+            # which raises RuntimeError("Working outside of application
+            # context") without one. An explicit app context is enough to
+            # satisfy that; there's no real request to tear down here.
+            with app.app_context():
+                _snapshot_db()
+                _start_scan_bg()
+        _ipod_state["ipod_name"] = None
+        _staging_move_state["running"] = False
+
+
+@app.route("/api/ipod/staging/move", methods=["POST"])
+def ipod_staging_move():
+    data = request.get_json(force=True, silent=True) or {}
+    _name, staging_root = _resolve_staging_root(data.get("ipod_name"))
+    if not staging_root or not os.path.isdir(staging_root):
+        return jsonify({"started": False, "error": "No staged import to move"})
+    with _staging_move_lock:
+        if _staging_move_state["running"]:
+            return jsonify({"started": False, "error": "Already running"})
+        _staging_move_state.update(running=True, done=0, total=0, result=None, error=None)
+        threading.Thread(target=_run_staging_move_bg, args=(staging_root,), daemon=True).start()
+        return jsonify({"started": True, "error": None})
+
+
+@app.route("/api/ipod/staging/move-progress")
+def ipod_staging_move_progress():
+    return jsonify(_staging_move_state)
+
+
+# Runs right after staging/move above finishes (see runIpodImport() in
+# app.js) -- freshly-moved tracks now have real ids, but a plain scan alone
 # doesn't populate has_art (that's normally the "deep scan" tag-checker's
-# job, see tags_deep_scan/_run_deep_scan_bg above), and iPod syncs
-# frequently drop full-size embedded art to save device space even when the
-# source library had it (~70% of a real 1,717-track iPod tested here had
-# none on-device despite the library copy having it). This checks exactly
-# the tracks this import just copied and best-effort backfills art from
-# Deezer for whichever of them have none -- same _fetch_and_cache_art
-# mechanism as the per-track "Fetch cover art" button, just applied in bulk
-# with the same rate-limiting fill_genres.py already uses for the same API.
+# job, see tags_deep_scan/_run_deep_scan_bg above). fix_staged_art already
+# covers most of this before the move, but this remains as a safety net for
+# whatever the user chose to skip or that the search there missed -- same
+# _fetch_and_cache_art mechanism as the per-track "Fetch cover art" button,
+# just applied in bulk with the same rate-limiting fill_genres.py already
+# uses for the same API.
 _ipod_artfill_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
 _ipod_artfill_lock = threading.Lock()
 
