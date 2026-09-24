@@ -2715,6 +2715,36 @@ def get_art(track_id, fpath, thumb=False):
         if os.path.isfile(cached):
             with open(cached, "rb") as f:
                 return f.read(), mime
+
+    # A full-size cover can be cached with no thumb alongside it yet --
+    # not just a not-yet-thumbnailed embedded extraction (handled below),
+    # but routinely now from _fetch_and_cache_art's external Deezer/iTunes/
+    # MusicBrainz downloads, which cache a full-size image but never write
+    # a thumb of their own. Derive the thumb from that cached full copy
+    # before falling back to _extract_art, which reads embedded art from
+    # the audio file itself -- exactly what external-only art has none of,
+    # so that fallback would just fail and wrongly write a permanent .none
+    # marker for a track whose art clearly does exist. Checked before the
+    # .none check too, since a thumb request that raced an external fetch
+    # (asked before the full copy existed, based its own miss on the audio
+    # file alone) may have already written that same wrong .none marker --
+    # a full copy existing now overrides it.
+    if thumb:
+        for ext, mime in ((".jpg", "image/jpeg"), (".png", "image/png")):
+            full_cached = os.path.join(ART_CACHE_DIR, f"{track_id}{ext}")
+            if os.path.isfile(full_cached):
+                with open(full_cached, "rb") as f:
+                    full_data = f.read()
+                none_marker = os.path.join(ART_CACHE_DIR, f"{track_id}.none")
+                if os.path.isfile(none_marker):
+                    os.remove(none_marker)
+                thumb_data, thumb_mime = _resize_art(full_data, ART_THUMB_DIM)
+                if thumb_data is None:
+                    return full_data, mime
+                with open(os.path.join(ART_CACHE_DIR, f"{track_id}.thumb.jpg"), "wb") as tf:
+                    tf.write(thumb_data)
+                return thumb_data, thumb_mime
+
     if os.path.isfile(os.path.join(ART_CACHE_DIR, f"{track_id}.none")):
         return None, None
 
@@ -2809,6 +2839,23 @@ def fetch_art(track_id):
         status = 404 if error == "No match found" else 502
         return jsonify({"ok": False, "error": error}), status
     return jsonify({"ok": True, "track_id": track_id})
+
+
+@app.route("/api/tracks/<int:track_id>/reveal", methods=["POST"])
+def reveal_track(track_id):
+    """Reveals a track's file in Finder, selected -- macOS only (matches
+    ipod_staging_reveal's own platform guard above), purely a convenience
+    that reads nothing and writes nothing."""
+    db = get_db()
+    row = db.execute("SELECT path FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if not row:
+        abort(404)
+    fpath = os.path.join(MUSIC_DIR, row["path"])
+    if not os.path.isfile(fpath):
+        return jsonify({"ok": False, "error": "File not found on disk"})
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-R", fpath])
+    return jsonify({"ok": True})
 
 
 # ----------------------------------------------------------------- ratings --

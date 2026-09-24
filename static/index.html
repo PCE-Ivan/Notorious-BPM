@@ -603,6 +603,23 @@
   </div>
 </div>
 
+<!-- Right-click menu for library track rows. A single shared instance
+     repositioned per-click (see showTrackContextMenu in app.js) rather than
+     one per row -- same reasoning as #modal-backdrop above. -->
+<div id="track-context-menu" class="context-menu hidden">
+  <button id="ctx-play" class="context-menu-item">▶ Play</button>
+  <button id="ctx-queue-next" class="context-menu-item">▸ Play next</button>
+  <div class="context-menu-divider"></div>
+  <button id="ctx-add-playlist" class="context-menu-item">+ Add to playlist</button>
+  <button id="ctx-edit-tags" class="context-menu-item">🏷 Edit tags</button>
+  <button id="ctx-fetch-art" class="context-menu-item">🖼 Fetch cover art</button>
+  <button id="ctx-convert" class="context-menu-item">⇄ Convert</button>
+  <div class="context-menu-divider"></div>
+  <button id="ctx-reveal" class="context-menu-item">📁 Show in Finder</button>
+  <div class="context-menu-divider"></div>
+  <button id="ctx-delete" class="context-menu-item danger">🗑 Delete</button>
+</div>
+
 <!-- Separate from #modal-backdrop above -- that one already has its own
      open/close contract (openModal/modalOkHandler) built around a single
      text-input flow ("New playlist" etc.); a second, independent user of

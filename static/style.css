@@ -224,6 +224,25 @@ html, body {
 .library-recent-item.missing:hover { background: none; }
 .library-recent-item .missing-tag { font-size: 11px; color: var(--danger); flex-shrink: 0; }
 .library-recent-empty { font-size: 12px; color: var(--text-dim); padding: 6px 10px; }
+
+.context-menu {
+  position: fixed; z-index: 200;
+  min-width: 200px; max-width: 300px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0,0,0,.3);
+  padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.context-menu-item {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  padding: 8px 10px; border-radius: var(--radius); font-size: 13px; color: var(--text);
+  cursor: pointer;
+}
+.context-menu-item:hover, .context-menu-item:focus-visible { background: var(--bg-hover); }
+.context-menu-item:disabled { color: var(--text-dim); cursor: not-allowed; }
+.context-menu-item:disabled:hover { background: none; }
+.context-menu-item.danger:hover { background: var(--danger); color: #fff; }
+.context-menu-divider { height: 1px; background: var(--border); margin: 4px 2px; }
 .current-folder {
   color: var(--text-dim);
   font-size: 10px;

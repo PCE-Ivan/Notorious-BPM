@@ -271,6 +271,7 @@ function renderTrackList(container, list, { showAdd, append } = {}) {
   list.forEach((t, i) => {
     const row = document.createElement("div");
     row.className = "track-row";
+    row.dataset.id = t.id;
     if (state.currentTrack && state.currentTrack.id === t.id) row.classList.add("playing");
     if (state.selected.has(t.id)) row.classList.add("selected");
     row.innerHTML = `
@@ -331,9 +332,77 @@ function renderTrackList(container, list, { showAdd, append } = {}) {
       e.stopPropagation();
       lookupTrackTags(t, row, e.currentTarget);
     });
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showTrackContextMenu(e, t, row);
+    });
     container.appendChild(row);
   });
 }
+
+// -------------------------------------------------------- context menu --
+// Right-clicking a row that's already part of a multi-selection acts on the
+// whole selection (matching Finder/iTunes); right-clicking anything else
+// collapses the selection down to just that one row first -- same
+// convention, and it keeps the bulk-action items' effect visibly in sync
+// with what's highlighted.
+function showTrackContextMenu(event, track, row) {
+  if (!(state.selected.has(track.id) && state.selected.size > 1)) {
+    clearSelection();
+    toggleSelection(track.id, row);
+  }
+  const menu = el("track-context-menu");
+  const selectedIds = Array.from(state.selected);
+
+  el("ctx-play").onclick = () => { playTrack(track, state.currentList); hideTrackContextMenu(); };
+  el("ctx-queue-next").onclick = () => { queueTrackNext(track, null); hideTrackContextMenu(); };
+  el("ctx-add-playlist").onclick = () => { openAddToPlaylistModal(selectedIds); hideTrackContextMenu(); };
+  el("ctx-edit-tags").onclick = () => { el("selection-edit-tags").click(); hideTrackContextMenu(); };
+  el("ctx-convert").onclick = () => { el("selection-convert").click(); hideTrackContextMenu(); };
+  el("ctx-fetch-art").onclick = () => {
+    hideTrackContextMenu();
+    fetchArtForTrack(track.id).catch(() => showToast("Couldn't find cover art for this track.", { kind: "error" }));
+  };
+  el("ctx-reveal").onclick = () => {
+    hideTrackContextMenu();
+    api(`/tracks/${track.id}/reveal`, { method: "POST" }).then((r) => {
+      if (!r.ok) showToast(r.error || "Couldn't show that file.", { kind: "error" });
+    });
+  };
+  el("ctx-delete").onclick = async () => {
+    hideTrackContextMenu();
+    const n = selectedIds.length;
+    const ok = await customConfirm(
+      n > 1 ? `Move ${n} tracks to Trash?` : "Move this track to Trash?",
+      { okLabel: "Delete", danger: true }
+    );
+    if (!ok) return;
+    const status = await deleteTracksWithProgress(selectedIds);
+    if (status && !status.error) {
+      clearSelection();
+      await loadFacets();
+      await loadTracks(true);
+    }
+  };
+
+  menu.classList.remove("hidden");
+  const maxLeft = window.innerWidth - menu.offsetWidth - 8;
+  const maxTop = window.innerHeight - menu.offsetHeight - 8;
+  menu.style.left = `${Math.max(8, Math.min(event.clientX, maxLeft))}px`;
+  menu.style.top = `${Math.max(8, Math.min(event.clientY, maxTop))}px`;
+}
+
+function hideTrackContextMenu() {
+  el("track-context-menu").classList.add("hidden");
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#track-context-menu")) hideTrackContextMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") hideTrackContextMenu();
+});
+el("main-scroll").addEventListener("scroll", hideTrackContextMenu);
 
 // Per-track equivalent of the header Tag button's bulk tools -- runs the
 // same Deezer-backed genre/year/artist-title lookups against just this one
@@ -3679,15 +3748,16 @@ function dupReviewForgetTrack(trackId) {
   updateDupReviewBulkBar();
 }
 
-// Shared by both the per-row "Delete this file" button and the bulk
-// "Delete selected" button below -- /delete-tracks runs in the
-// background with progress polling (a cross-filesystem move per file can
-// take a real, visible amount of time for more than a few files), so
-// both call sites show the same real progress bar instead of a static
-// "Deleting…" with no way to tell it apart from stuck.
-async function deleteTracksWithProgress(trackIds) {
-  const progressEl = el("dup-review-progress");
-  const progressFill = el("dup-review-progress-fill");
+// Shared by the dup-review screen's delete buttons and the library's own
+// right-click "Delete" -- /delete-tracks runs in the background with
+// progress polling (a cross-filesystem move per file can take a real,
+// visible amount of time for more than a few files). `progressIds` lets a
+// caller wire this into its own visible progress bar; callers with nowhere
+// sensible to show one (a right-click delete of a track or two, over
+// almost before a bar could render) just get a toast summary instead.
+async function deleteTracksWithProgress(trackIds, progressIds = null) {
+  const progressEl = progressIds && el(progressIds.bar);
+  const progressFill = progressIds && el(progressIds.fill);
   const started = await api("/delete-tracks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3697,15 +3767,21 @@ async function deleteTracksWithProgress(trackIds) {
     showToast(started.error === "Already running" ? "A deletion is already running." : (started.error || "Couldn't delete."), { kind: "error" });
     return null;
   }
-  progressFill.style.width = "0%";
-  progressEl.classList.remove("hidden");
+  if (progressEl) {
+    progressFill.style.width = "0%";
+    progressEl.classList.remove("hidden");
+  }
   try {
-    return await pollProgress("/delete-tracks/progress", (s) => {
-      progressFill.style.width = s.total ? `${Math.min(100, (s.done / s.total) * 100)}%` : "0%";
+    const status = await pollProgress("/delete-tracks/progress", (s) => {
+      if (progressFill) progressFill.style.width = s.total ? `${Math.min(100, (s.done / s.total) * 100)}%` : "0%";
       return s.running;
     });
+    if (!progressEl && status && !status.error) {
+      showToast(`Deleted ${status.deleted || 0} track(s).`, { kind: "success" });
+    }
+    return status;
   } finally {
-    progressEl.classList.add("hidden");
+    if (progressEl) progressEl.classList.add("hidden");
   }
 }
 
@@ -3746,7 +3822,7 @@ function renderDupReviewGroup(group) {
       if (!(await customConfirm(`Delete "${t.title}" (${dupReviewTrackMeta(t) || "no album info"})? Goes to Trash, not deleted outright.`, { okLabel: "Delete", danger: true }))) return;
       const rowBtn = e.target;
       rowBtn.disabled = true;
-      const status = await deleteTracksWithProgress([t.id]);
+      const status = await deleteTracksWithProgress([t.id], { bar: "dup-review-progress", fill: "dup-review-progress-fill" });
       if (!status) { rowBtn.disabled = false; return; }
       if (status.error) {
         showToast(`Delete failed: ${status.error}`, { kind: "error" });
@@ -3781,7 +3857,7 @@ el("dup-review-delete-selected").addEventListener("click", async () => {
   el("dup-review-select-none").disabled = true;
   let status;
   try {
-    status = await deleteTracksWithProgress(ids);
+    status = await deleteTracksWithProgress(ids, { bar: "dup-review-progress", fill: "dup-review-progress-fill" });
   } finally {
     btn.disabled = false;
     el("dup-review-select-none").disabled = false;
@@ -4168,14 +4244,32 @@ el("lyrics-close").addEventListener("click", () => el("lyrics-backdrop").classLi
 el("lyrics-backdrop").addEventListener("click", (e) => { if (e.target.id === "lyrics-backdrop") el("lyrics-backdrop").classList.add("hidden"); });
 
 // ---------------------------------------------------------------- cover art --
+// Shared by the now-playing panel's own fetch button and the library row's
+// right-click "Fetch cover art" -- either way, a fetched image needs two
+// repaints: the row's <img> (set once at render time, never repaints itself
+// just because the DB's has_art flag changed out from under it) and, only
+// when the fetched track happens to also be the one currently playing, the
+// now-playing panel's own art.
+async function fetchArtForTrack(trackId) {
+  await api(`/art/${trackId}/fetch`, { method: "POST" });
+  const freshUrl = `${artUrl(trackId, true)}&t=${Date.now()}`;
+  // Not scoped to #track-list -- the same row markup (and this same fetch
+  // path, via the right-click menu) also appears inside #playlist-tracks.
+  document.querySelectorAll(`.track-row[data-id="${trackId}"] .col-art`).forEach((cell) => {
+    cell.innerHTML = `<img loading="lazy" src="${freshUrl}" alt="">`;
+  });
+  if (state.currentTrack && state.currentTrack.id === trackId) {
+    el("np-art").src = freshUrl;
+    el("np-art").classList.remove("hidden");
+  }
+}
+
 el("art-fetch-btn").addEventListener("click", async () => {
   if (!state.currentTrack || state.currentTrack.isRadio) return;
   const btn = el("art-fetch-btn");
   btn.disabled = true;
   try {
-    await api(`/art/${state.currentTrack.id}/fetch`, { method: "POST" });
-    el("np-art").src = `${artUrl(state.currentTrack.id, true)}&t=${Date.now()}`;
-    el("np-art").classList.remove("hidden");
+    await fetchArtForTrack(state.currentTrack.id);
   } catch (e) {
     showToast("Couldn't find cover art for this track.", { kind: "error" });
   } finally {
