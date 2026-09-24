@@ -3,6 +3,20 @@
 logic. Never touches the real library.db/config.json -- everything here
 runs against fresh temp directories, deleted again at the end.
 
+Run this file ON ITS OWN, not combined with other test files on one
+`python3 -m unittest` command line. Combining test files that each set
+JUKEBOX_DB_PATH/JUKEBOX_MUSIC_DIR (this one, test_smoke.py, ...) runs them
+in one shared process, where modules like scan_library.py/organize_by_
+artist.py/etc still cache their own MUSIC_DIR/DB_PATH globals once at
+import time -- an already-imported module from an earlier test file in
+the same run won't pick up a later file's env var changes without an
+importlib.reload() every caller remembers to do correctly. (config.py's
+own CONFIG_PATH no longer has this problem -- get_config_path() resolves
+fresh on every call -- fixed after exactly this kind of combined run once
+wrote a scratch test path into the real, production config on this exact
+machine. The other modules' own module-level globals still do, though;
+this warning stays here as a result.)
+
 Run manually:
 
     python3 test_library_manager.py

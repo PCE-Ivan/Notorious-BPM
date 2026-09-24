@@ -32,12 +32,24 @@ def get_app_data_dir():
     return path
 
 
-CONFIG_PATH = os.environ.get("JUKEBOX_CONFIG_PATH") or os.path.join(get_app_data_dir(), "config.json")
+def get_config_path():
+    """Resolved fresh on every call (not cached as a module-level constant
+    computed once at import time) -- a module-level CONFIG_PATH would only
+    ever reflect whatever JUKEBOX_CONFIG_PATH was set to the first time
+    config.py got imported in a process, and changing the env var later
+    (as every test file in this repo does, to isolate itself with its own
+    scratch config) would silently do nothing without an importlib.reload()
+    every single caller remembers to do correctly -- confirmed the hard
+    way: an incorrectly-isolated combined test run once wrote a scratch
+    test path into the real, production config on this exact machine.
+    Resolving fresh here means an env var change always takes effect
+    immediately, for every caller, with no reload gymnastics needed."""
+    return os.environ.get("JUKEBOX_CONFIG_PATH") or os.path.join(get_app_data_dir(), "config.json")
 
 
 def load_config():
     try:
-        with open(CONFIG_PATH) as f:
+        with open(get_config_path()) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -50,17 +62,18 @@ def save_config(cfg):
     load_config(), and (if it then goes on to write itself) save that empty
     dict back, silently discarding music_dir and every other previously-
     saved key. The temp filename is unique per call (not a fixed
-    CONFIG_PATH + ".tmp") so two overlapping saves can't collide on the
+    config_path + ".tmp") so two overlapping saves can't collide on the
     same temp file and have one's os.replace() find it already consumed by
     the other. Prefer update_config() below over calling this directly --
     it also closes the separate lost-update race across two full
     read-modify-write cycles, which a unique temp file alone doesn't."""
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(CONFIG_PATH), prefix=".config-", suffix=".tmp")
+    config_path = get_config_path()
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(config_path), prefix=".config-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(cfg, f, indent=2)
-        os.replace(tmp_path, CONFIG_PATH)
+        os.replace(tmp_path, config_path)
     except BaseException:
         os.unlink(tmp_path)
         raise
