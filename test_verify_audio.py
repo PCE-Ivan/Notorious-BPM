@@ -50,6 +50,17 @@ class TagsLookMismatchedTest(unittest.TestCase):
         # because the file had no tags at all.
         self.assertFalse(app._tags_look_mismatched(None, None, "Falco", "Rock Me Amadeus"))
 
+    def test_non_latin_titles_are_still_compared(self):
+        # Found while testing against a real library: an a-z0-9-only strip
+        # reduces a fully Japanese/Cyrillic/etc. title to "" on both sides,
+        # and the emptiness checks then treat that as an automatic match --
+        # so a genuine mismatch in a non-Latin-tagged track would never be
+        # caught. Matching pair should stay a non-mismatch...
+        self.assertFalse(app._tags_look_mismatched("梶芽衣子", "修羅の花", "梶芽衣子", "修羅の花"))
+        # ...and a real mismatch between two non-Latin titles must still be
+        # caught, not waved through as "nothing to compare".
+        self.assertTrue(app._tags_look_mismatched("梶芽衣子", "修羅の花", "坂本九", "上を向いて歩こう"))
+
 
 class FingerprintLookupTest(unittest.TestCase):
     @classmethod

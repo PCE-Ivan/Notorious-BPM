@@ -1259,9 +1259,13 @@ def _tags_look_mismatched(current_artist, current_title, found_artist, found_tit
     Warnes"), so this only flags a likely-real mismatch (the fingerprint
     found a genuinely different song) rather than every stylistic
     difference. Substring-based, same convention art_lookup.py/fill_genres.py
-    already use for their own same-artist filtering."""
+    already use for their own same-artist filtering. Strips to word chars
+    (Unicode letters/digits, not just a-z0-9) -- an a-z0-9-only strip reduces a
+    fully non-Latin title (Japanese, Cyrillic, ...) to an empty string on
+    both sides, which the emptiness checks below then always treat as an
+    automatic, unverified match."""
     def norm(s):
-        return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+        return re.sub(r"[^\w]", "", (s or "").lower())
     cur_artist, cur_title = norm(current_artist), norm(current_title)
     found_artist_n, found_title_n = norm(found_artist), norm(found_title)
     artist_ok = not cur_artist or not found_artist_n or cur_artist in found_artist_n or found_artist_n in cur_artist
