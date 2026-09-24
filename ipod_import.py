@@ -232,27 +232,77 @@ def _makedirs_matching_case(dest_folder):
     os.makedirs(dest_folder, exist_ok=True)
 
 
-def import_tracks(mount, staging_root, progress_cb=None):
+def _apparent_bitrate_kbps(fpath, duration):
+    """File size / duration, in kbps -- cheap to compute (no decoding), and
+    the same proxy app.py's own duplicate-quality comparison
+    (_resolve_same_recording) already uses for exactly this "which copy is
+    actually better" question. Not exact for VBR, but good enough to tell
+    a 128kbps rip from a lossless one, which is the actual decision this
+    is for."""
+    if not duration:
+        return None
+    try:
+        size = os.path.getsize(fpath)
+    except OSError:
+        return None
+    return round(size * 8 / duration / 1000)
+
+
+def _read_duration(fpath):
+    import mutagen
+    try:
+        audio = mutagen.File(fpath)
+    except Exception:
+        return None
+    return getattr(audio.info, "length", None) if audio and audio.info else None
+
+
+def import_tracks(mount, staging_root, music_dir, existing_index=None, normalize_key=None, progress_cb=None):
     """Copies every track this can resolve into staging_root, laid out
     exactly like the real library will eventually see it once moved there
     (see move_staged_to_library below): staging_root/<Artist>/<Artist> -
-    <Title>.ext. Nothing here checks the copied tracks against the real
-    library at all -- that's a separate, later decision once the batch has
-    actually been reviewed and fixed up, not something to decide silently
-    while copying. A destination file that already exists at exactly the
+    <Title>.ext. A destination file that already exists at exactly the
     source's size is treated as already staged from a previous run of this
     same import and left alone; anything else occupying that exact name
     gets a "(2)", "(3)", ... suffix, the same convention
     organize_by_artist.py itself uses. Source files on the iPod are only
-    ever read, never modified or deleted."""
+    ever read, never modified or deleted.
+
+    `existing_index` -- {(normalized_artist, normalized_title): {"path":
+    relpath, "duration": seconds}} for the real library at the moment the
+    import starts -- is checked *before* copying: a match is treated as a
+    duplicate and is never staged at all, only reported in the returned
+    `duplicates` list, alongside an apparent-bitrate comparison of the two
+    copies so the caller can see whether the iPod's version is actually
+    better or worse quality before accepting the skip. This is separate
+    from (and runs before) move_staged_to_library's own duplicate check,
+    which only ever reports -- that one exists to catch anything that
+    still matches at move time, such as two tracks within this same batch
+    that happen to be the same song."""
+    existing_index = existing_index or {}
+    normalize_key = normalize_key or _default_normalize_key
     itunesdb_path = os.path.join(mount, "iPod_Control", "iTunes", "iTunesDB")
     tracks = parse_itunesdb(itunesdb_path, mount)
     os.makedirs(staging_root, exist_ok=True)
 
     copied_paths = []
     already_staged = 0
+    duplicates = []
     total = len(tracks)
     for i, t in enumerate(tracks):
+        existing = existing_index.get(normalize_key(t["artist"], t["title"]))
+        if existing is not None:
+            duplicates.append({
+                "artist": t["artist"],
+                "title": t["title"],
+                "library_path": existing["path"],
+                "ipod_bitrate": _apparent_bitrate_kbps(t["real_path"], _read_duration(t["real_path"])),
+                "library_bitrate": _apparent_bitrate_kbps(os.path.join(music_dir, existing["path"]), existing.get("duration")),
+            })
+            if progress_cb:
+                progress_cb(i + 1, total)
+            continue
+
         ext = os.path.splitext(t["real_path"])[1].lower()
         dest_folder, natural_path = _natural_staged_path(staging_root, t["artist"], t["title"], ext)
 
@@ -276,6 +326,7 @@ def import_tracks(mount, staging_root, progress_cb=None):
         "copied": len(copied_paths),
         "already_staged": already_staged,
         "copied_paths": copied_paths,
+        "duplicates": duplicates,
     }
 
 
@@ -288,14 +339,14 @@ def import_tracks(mount, staging_root, progress_cb=None):
 # review list, and writing corrections straight back to those files,
 # avoids that entirely and touches none of those existing queries.
 def _read_tags_for_review(fpath):
-    """(artist, title, album, genre, year, duration, ext, has_art) read
-    straight from a file's own current tags -- no DB row exists yet for a
-    staged track, so this is the only source of truth, and it's re-read
-    fresh every time rather than cached, since an earlier fix step in the
-    same review session may have just changed these tags. Falls back to
-    the containing folder/filename for artist/title on a completely
-    untagged file, matching how scan_library.py treats one for the real
-    library."""
+    """(artist, title, album, genre, year, duration, bitrate, ext, has_art)
+    read straight from a file's own current tags -- no DB row exists yet
+    for a staged track, so this is the only source of truth, and it's
+    re-read fresh every time rather than cached, since an earlier fix step
+    in the same review session may have just changed these tags. Falls
+    back to the containing folder/filename for artist/title on a
+    completely untagged file, matching how scan_library.py treats one for
+    the real library."""
     import mutagen
     from scan_library import first_or_none, parse_year
 
@@ -319,7 +370,8 @@ def _read_tags_for_review(fpath):
 
     return {
         "artist": artist, "title": title, "album": album, "genre": genre,
-        "year": year, "duration": duration, "ext": os.path.splitext(fpath)[1].lower(),
+        "year": year, "duration": duration, "bitrate": _apparent_bitrate_kbps(fpath, duration),
+        "ext": os.path.splitext(fpath)[1].lower(),
         "has_art": _has_embedded_art(fpath),
     }
 

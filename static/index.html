@@ -762,12 +762,29 @@
       </ul>
       <div id="ipod-progress" class="dup-progress hidden"><div id="ipod-progress-fill" class="dup-progress-fill"></div></div>
 
+      <!-- Shown once a fresh copy finishes, if anything was skipped because
+           it already matched something in the library by artist+title.
+           Nothing here was ever staged -- these files were never copied at
+           all -- so there's no "undo", just a bitrate comparison to see
+           whether the iPod's copy would actually have been better/worse
+           quality than what's already there. Not shown when resuming an
+           already-staged batch, since that comparison only exists at copy
+           time. -->
+      <div id="ipod-skipped-panel" class="ipod-review-panel hidden">
+        <p id="ipod-skipped-heading" class="ipod-review-heading"></p>
+        <div id="ipod-skipped-list" class="dup-review-list ipod-review-list"></div>
+      </div>
+
       <!-- Shown once copying finishes (or immediately when resuming a batch
            left over from an earlier, not-yet-finished import): nothing here
            is in the real library yet, so every fix below writes straight to
            the staged files, and nothing moves until "Move to library". -->
       <div id="ipod-review-panel" class="ipod-review-panel hidden">
         <p id="ipod-review-heading" class="ipod-review-heading"></p>
+        <div class="ipod-staging-path-row">
+          <code id="ipod-staging-path" class="ipod-staging-path"></code>
+          <button id="ipod-reveal-staging" class="btn-secondary btn-small">Reveal in Finder</button>
+        </div>
         <div class="ipod-review-actions">
           <button id="ipod-fix-names" class="btn-secondary btn-small">Fix names</button>
           <button id="ipod-fix-tags" class="btn-secondary btn-small">Fix genre &amp; year</button>

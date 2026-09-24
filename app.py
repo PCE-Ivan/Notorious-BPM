@@ -329,7 +329,7 @@ _ipod_state = {"running": False, "done": 0, "total": 0, "result": None, "error":
 _ipod_lock = threading.Lock()
 
 
-def _run_ipod_import_bg(mount, ipod_name, staging_root):
+def _run_ipod_import_bg(mount, ipod_name, staging_root, existing_index):
     def progress_cb(done, total):
         _ipod_state["done"] = done
         _ipod_state["total"] = total
@@ -345,8 +345,13 @@ def _run_ipod_import_bg(mount, ipod_name, staging_root):
         # a plain import (returning the already-loaded module) loses
         # nothing real here.
         import ipod_import
-        stats = ipod_import.import_tracks(mount, staging_root, progress_cb=progress_cb)
+        stats = ipod_import.import_tracks(
+            mount, staging_root, MUSIC_DIR, existing_index=existing_index,
+            normalize_key=lambda artist, title: (_normalize_dup_artist(artist), _normalize_dup_title(title)),
+            progress_cb=progress_cb,
+        )
         stats["ipod_name"] = ipod_name
+        stats["staging_path"] = staging_root
         _ipod_state["result"] = stats
     except Exception as e:
         _ipod_state["error"] = str(e)
@@ -354,13 +359,13 @@ def _run_ipod_import_bg(mount, ipod_name, staging_root):
         _ipod_state["running"] = False
 
 
-def _start_ipod_import_bg(mount, ipod_name, staging_root):
+def _start_ipod_import_bg(mount, ipod_name, staging_root, existing_index):
     """Same "already running" convention as the scan/organize jobs above."""
     with _ipod_lock:
         if _ipod_state["running"]:
             return False
         _ipod_state.update(running=True, done=0, total=0, result=None, error=None, ipod_name=ipod_name)
-        threading.Thread(target=_run_ipod_import_bg, args=(mount, ipod_name, staging_root), daemon=True).start()
+        threading.Thread(target=_run_ipod_import_bg, args=(mount, ipod_name, staging_root, existing_index), daemon=True).start()
         return True
 
 
@@ -402,7 +407,18 @@ def ipod_import_route():
     if not info:
         return jsonify({"started": False, "error": "No iPod Classic found. Make sure it's connected and shows “Do Not Disconnect.”"})
     staging_root = ipod_import.staging_root_for(MUSIC_DIR, info["name"])
-    started = _start_ipod_import_bg(info["mount"], info["name"], staging_root)
+    # Same (artist, title) normalization the Duplicates feature and the
+    # later staging/move step already use -- a song already in the
+    # library under any edition ("Live", "Remastered", a different
+    # release...) is treated as the same track. Built once, synchronously,
+    # right before the copy starts, so the skip decision reflects the
+    # library as it stands at import time.
+    db = get_db()
+    existing_index = {
+        (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"])): {"path": r["path"], "duration": r["duration"]}
+        for r in db.execute("SELECT artist, title, path, duration FROM tracks").fetchall()
+    }
+    started = _start_ipod_import_bg(info["mount"], info["name"], staging_root, existing_index)
     return jsonify({"started": started, "error": None if started else "Already running"})
 
 
@@ -434,8 +450,28 @@ def ipod_staging_list():
     import ipod_import
     name, staging_root = _resolve_staging_root(request.args.get("ipod_name"))
     if not staging_root or not os.path.isdir(staging_root):
-        return jsonify({"ipod_name": name, "tracks": []})
-    return jsonify({"ipod_name": name, "tracks": ipod_import.list_staged_tracks(staging_root)})
+        return jsonify({"ipod_name": name, "staging_path": staging_root, "tracks": []})
+    return jsonify({
+        "ipod_name": name,
+        "staging_path": staging_root,
+        "tracks": ipod_import.list_staged_tracks(staging_root),
+    })
+
+
+@app.route("/api/ipod/staging/reveal", methods=["POST"])
+def ipod_staging_reveal():
+    """Opens the holding folder in Finder -- purely a convenience so you
+    can see the actual files sitting there; nothing here reads or writes
+    them. macOS only (matches _pick_folder_dialog's own AppleScript-vs-Tk
+    split above); a no-op elsewhere since there's no single equivalent
+    command worth guessing at."""
+    data = request.get_json(force=True, silent=True) or {}
+    _name, staging_root = _resolve_staging_root(data.get("ipod_name"))
+    if not staging_root or not os.path.isdir(staging_root):
+        return jsonify({"ok": False, "error": "No staged import to show"})
+    if sys.platform == "darwin":
+        subprocess.run(["open", staging_root])
+    return jsonify({"ok": True})
 
 
 # One shared async-job shape for the three in-place staging fixes (names/

@@ -2323,9 +2323,12 @@ function setIpodStep(key, state, detail) {
 function resetIpodSteps() {
   ["detect", "copy", "move", "scan", "art"].forEach((k) => setIpodStep(k, "pending", ""));
   el("ipod-move-steps").classList.add("hidden");
+  el("ipod-skipped-panel").classList.add("hidden");
+  el("ipod-skipped-list").innerHTML = "";
   el("ipod-review-panel").classList.add("hidden");
   el("ipod-review-list").innerHTML = "";
   el("ipod-review-action-status").textContent = "";
+  el("ipod-staging-path").textContent = "";
   el("ipod-summary").classList.add("hidden");
   el("ipod-summary-list").innerHTML = "";
   el("ipod-summary-review-dups").classList.add("hidden");
@@ -2381,7 +2384,8 @@ el("ipod-backdrop").addEventListener("click", (e) => { if (e.target.id === "ipod
 
 function ipodReviewTrackMeta(t) {
   const format = t.ext ? t.ext.replace(/^\./, "").toUpperCase() : null;
-  return [format, t.album, t.genre, t.year, t.duration ? fmtTime(t.duration) : null].filter(Boolean).join(" · ");
+  const bitrate = t.bitrate ? `${t.bitrate}kbps` : null;
+  return [format, bitrate, t.album, t.genre, t.year, t.duration ? fmtTime(t.duration) : null].filter(Boolean).join(" · ");
 }
 
 function renderIpodReviewTrack(t) {
@@ -2392,6 +2396,30 @@ function renderIpodReviewTrack(t) {
     <div class="dup-review-track-info">
       <div class="dup-review-track-title">${escapeHtml(t.artist || "Unknown artist")} — ${escapeHtml(t.title || "")}</div>
       <div class="dup-review-track-meta">${escapeHtml(ipodReviewTrackMeta(t))}</div>
+      <div class="dup-review-track-meta">${escapeHtml(t.path || "")}</div>
+    </div>
+  `;
+  return row;
+}
+
+// Tracks the copy step skipped outright (never staged) because their
+// (artist, title) already matched something in the library -- see
+// ipod_import.import_tracks's own docstring. Shown once, right after
+// copying, so a bitrate comparison is available before the batch moves on.
+function renderIpodSkippedTrack(d) {
+  const row = document.createElement("div");
+  row.className = "dup-review-track";
+  const ipodBetter = d.ipod_bitrate && d.library_bitrate && d.ipod_bitrate > d.library_bitrate * 1.05;
+  const libBetter = d.ipod_bitrate && d.library_bitrate && d.library_bitrate > d.ipod_bitrate * 1.05;
+  const fmt = (v) => v ? `${v}kbps` : "unknown";
+  row.innerHTML = `
+    <div class="dup-review-track-info">
+      <div class="dup-review-track-title">${escapeHtml(d.artist || "Unknown artist")} — ${escapeHtml(d.title || "")}</div>
+      <div class="ipod-skipped-track-bitrates">
+        iPod: <span class="${ipodBetter ? "better" : ""}">${fmt(d.ipod_bitrate)}</span>
+        · Library: <span class="${libBetter ? "better" : ""}">${fmt(d.library_bitrate)}</span>
+      </div>
+      <div class="dup-review-track-meta">${escapeHtml(d.library_path || "")}</div>
     </div>
   `;
   return row;
@@ -2405,6 +2433,7 @@ const ipodReviewState = { ipodName: null };
 async function loadIpodReviewList() {
   const data = await api(`/ipod/staging?ipod_name=${encodeURIComponent(ipodReviewState.ipodName || "")}`);
   const tracks = data.tracks || [];
+  el("ipod-staging-path").textContent = data.staging_path || "";
   const list = el("ipod-review-list");
   list.innerHTML = "";
   tracks.slice(0, IPOD_REVIEW_MAX_SHOWN).forEach((t) => list.appendChild(renderIpodReviewTrack(t)));
@@ -2419,6 +2448,18 @@ async function loadIpodReviewList() {
     : "Nothing staged to review.";
   return tracks.length;
 }
+el("ipod-reveal-staging").addEventListener("click", async () => {
+  try {
+    const result = await api("/ipod/staging/reveal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ipod_name: ipodReviewState.ipodName }),
+    });
+    if (!result.ok) showToast(result.error || "Couldn't open that folder.", { kind: "error" });
+  } catch (e) {
+    showToast("Couldn't open that folder.", { kind: "error" });
+  }
+});
 
 async function runIpodStagingFix(action, label) {
   const buttons = [el("ipod-fix-names"), el("ipod-fix-tags"), el("ipod-fix-art"), el("ipod-move-to-library")];
@@ -2460,6 +2501,7 @@ el("ipod-fix-tags").addEventListener("click", () => runIpodStagingFix("tags", "F
 el("ipod-fix-art").addEventListener("click", () => runIpodStagingFix("art", "Fetching cover art"));
 
 async function moveIpodStagingToLibrary() {
+  el("ipod-skipped-panel").classList.add("hidden");
   el("ipod-review-panel").classList.add("hidden");
   el("ipod-move-steps").classList.remove("hidden");
 
@@ -2626,9 +2668,21 @@ async function runIpodImport() {
     const stats = status.result || {};
     const copied = stats.copied || 0;
     const already = stats.already_staged || 0;
-    setIpodStep("copy", "done", already
-      ? `${copied} new, ${already} already staged from a previous run`
-      : `${copied} track${copied === 1 ? "" : "s"}`);
+    const duplicates = stats.duplicates || [];
+    const copyDetail = [
+      already ? `${copied} new, ${already} already staged from a previous run` : `${copied} track${copied === 1 ? "" : "s"}`,
+      duplicates.length ? `${duplicates.length} skipped as already in your library` : null,
+    ].filter(Boolean).join(" — ");
+    setIpodStep("copy", "done", copyDetail);
+
+    if (duplicates.length) {
+      const list = el("ipod-skipped-list");
+      list.innerHTML = "";
+      duplicates.forEach((d) => list.appendChild(renderIpodSkippedTrack(d)));
+      el("ipod-skipped-heading").textContent =
+        `${duplicates.length} track${duplicates.length === 1 ? "" : "s"} skipped — already in your library by artist & title. Never copied, so there's nothing to undo.`;
+      el("ipod-skipped-panel").classList.remove("hidden");
+    }
 
     await enterIpodReview(stats.ipod_name);
   } catch (e) {
