@@ -2981,7 +2981,48 @@ async function runDeepScan() {
     const info = data[key];
     if (!info || info.count === 0) return;
     anyIssues = true;
-    renderTagIssueSection(el("tags-deep-results"), key, info);
+    const extraLabel = key === "art" ? "Find missing cover art" : null;
+    const extraHandler = key === "art" ? async (e) => {
+      const btn = e.target;
+      btn.disabled = true;
+      const started = await api("/fill-art", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_ids: info.tracks.map((t) => t.id) }),
+      });
+      if (started.error) {
+        btn.disabled = false;
+        showToast(started.error === "Already running" ? "An art lookup is already running." : started.error, { kind: "error" });
+        return;
+      }
+      // Tries several free sources (Deezer, then iTunes, then
+      // MusicBrainz+Cover Art Archive) per track -- can take a while
+      // across hundreds of tracks, so poll instead of one long blocking
+      // request with no way to tell it apart from stuck.
+      let artStatus;
+      try {
+        artStatus = await pollProgress("/fill-art/progress", (s) => {
+          btn.textContent = s.total ? `Looking up… ${s.done}/${s.total} (${s.fixed} found)` : "Looking up…";
+          return s.running;
+        });
+      } catch (pollErr) {
+        btn.textContent = "Find missing cover art";
+        btn.disabled = false;
+        showToast(pollErr.message, { kind: "error" });
+        return;
+      }
+      if (artStatus.error) {
+        btn.textContent = "Find missing cover art";
+        btn.disabled = false;
+        showToast(`Cover art lookup failed: ${artStatus.error}`, { kind: "error" });
+        return;
+      }
+      const stats = artStatus.result || {};
+      btn.textContent = `Found ${stats.fixed || 0}/${stats.checked || 0}`;
+      await loadFacets();
+      await loadTracks(true);
+    } : null;
+    renderTagIssueSection(el("tags-deep-results"), key, info, extraLabel, extraHandler);
   });
   if (!anyIssues) {
     el("tags-deep-results").innerHTML = `<div class="tags-empty">No issues found for the selected checks.</div>`;
@@ -3355,14 +3396,28 @@ async function scanDuplicates() {
   el("dup-details").classList.add("hidden");
   el("dup-details").innerHTML = "";
   delete el("dup-details").dataset.rendered;
-  el("dup-progress").classList.add("hidden");
   el("dup-review-open").classList.add("hidden");
 
-  const preview = await api("/duplicates/auto-clean", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dry_run: true }),
-  });
+  // The scan itself is just DB queries and stat() calls -- fast, and over
+  // before there'd be anything meaningful to count a percentage against
+  // -- so this shows "still working" with a sliding indeterminate bar
+  // rather than a real 0-100% progress bar there's no real number for.
+  const progressEl = el("dup-progress");
+  const progressFill = el("dup-progress-fill");
+  progressFill.classList.add("indeterminate");
+  progressEl.classList.remove("hidden");
+
+  let preview;
+  try {
+    preview = await api("/duplicates/auto-clean", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dry_run: true }),
+    });
+  } finally {
+    progressEl.classList.add("hidden");
+    progressFill.classList.remove("indeterminate");
+  }
   dupState.preview = preview;
 
   if (preview.tracks_to_delete === 0) {
@@ -3529,6 +3584,36 @@ function dupReviewForgetTrack(trackId) {
   updateDupReviewBulkBar();
 }
 
+// Shared by both the per-row "Delete this file" button and the bulk
+// "Delete selected" button below -- /delete-tracks runs in the
+// background with progress polling (a cross-filesystem move per file can
+// take a real, visible amount of time for more than a few files), so
+// both call sites show the same real progress bar instead of a static
+// "Deleting…" with no way to tell it apart from stuck.
+async function deleteTracksWithProgress(trackIds) {
+  const progressEl = el("dup-review-progress");
+  const progressFill = el("dup-review-progress-fill");
+  const started = await api("/delete-tracks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ track_ids: trackIds }),
+  });
+  if (!started.started) {
+    showToast(started.error === "Already running" ? "A deletion is already running." : (started.error || "Couldn't delete."), { kind: "error" });
+    return null;
+  }
+  progressFill.style.width = "0%";
+  progressEl.classList.remove("hidden");
+  try {
+    return await pollProgress("/delete-tracks/progress", (s) => {
+      progressFill.style.width = s.total ? `${Math.min(100, (s.done / s.total) * 100)}%` : "0%";
+      return s.running;
+    });
+  } finally {
+    progressEl.classList.add("hidden");
+  }
+}
+
 function renderDupReviewGroup(group) {
   const card = document.createElement("div");
   card.className = "dup-review-group";
@@ -3561,14 +3646,18 @@ function renderDupReviewGroup(group) {
       else dupReviewState.selected.delete(t.id);
       updateDupReviewBulkBar();
     });
-    row.querySelector(".dup-review-delete-btn").addEventListener("click", async () => {
+    row.querySelector(".dup-review-delete-btn").addEventListener("click", async (e) => {
       if (list.children.length <= 1) return; // never delete the last remaining copy
       if (!(await customConfirm(`Delete "${t.title}" (${dupReviewTrackMeta(t) || "no album info"})? Goes to Trash, not deleted outright.`, { okLabel: "Delete", danger: true }))) return;
-      await api("/delete-tracks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_ids: [t.id] }),
-      });
+      const rowBtn = e.target;
+      rowBtn.disabled = true;
+      const status = await deleteTracksWithProgress([t.id]);
+      if (!status) { rowBtn.disabled = false; return; }
+      if (status.error) {
+        showToast(`Delete failed: ${status.error}`, { kind: "error" });
+        rowBtn.disabled = false;
+        return;
+      }
       dupState.anyDeleted = true;
       dupReviewForgetTrack(t.id);
       row.remove();
@@ -3594,15 +3683,19 @@ el("dup-review-delete-selected").addEventListener("click", async () => {
   if (!(await customConfirm(`Delete ${ids.length.toLocaleString()} file(s)? Goes to Trash, not deleted outright.`, { okLabel: "Delete", danger: true }))) return;
   btn.disabled = true;
   btn.textContent = "Deleting…";
+  el("dup-review-select-none").disabled = true;
+  let status;
   try {
-    await api("/delete-tracks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ track_ids: ids }),
-    });
+    status = await deleteTracksWithProgress(ids);
   } finally {
     btn.disabled = false;
+    el("dup-review-select-none").disabled = false;
     btn.textContent = "Delete selected";
+  }
+  if (!status) return;
+  if (status.error) {
+    showToast(`Delete failed: ${status.error}`, { kind: "error" });
+    return;
   }
   dupState.anyDeleted = true;
   ids.forEach((id) => {
@@ -4516,14 +4609,29 @@ el("selection-queue").addEventListener("click", () => {
 el("selection-edit-tags").addEventListener("click", () => {
   const ids = Array.from(state.selected);
   if (!ids.length) return;
+  // Artist/title default to the single selected track's own current
+  // values (editing them only makes sense one track at a time -- with
+  // several selected, showing the first one's values as a starting point
+  // and leaving them blank/unchanged for the others would be confusing,
+  // so those two fields are hidden once more than one track is selected).
+  const single = ids.length === 1 ? state.currentList.find((t) => t.id === ids[0]) : null;
+  const artistTitleHtml = single ? `
+    <div class="filter-group" style="margin-bottom:10px"><label>Artist</label><input type="text" id="bulk-tag-artist" value="${escapeHtml(single.artist || "")}"></div>
+    <div class="filter-group" style="margin-bottom:10px"><label>Title</label><input type="text" id="bulk-tag-title" value="${escapeHtml(single.title || "")}"></div>
+  ` : "";
   const body = `
     <p style="color:var(--text-dim);font-size:12px;margin:0 0 12px">${ids.length} track(s) selected — blank fields are left unchanged.</p>
+    ${artistTitleHtml}
     <div class="filter-group" style="margin-bottom:10px"><label>Genre</label><input type="text" id="bulk-tag-genre"></div>
     <div class="filter-group" style="margin-bottom:10px"><label>Album</label><input type="text" id="bulk-tag-album"></div>
     <div class="filter-group"><label>Year</label><input type="text" id="bulk-tag-year"></div>
   `;
   openModal("Edit tags for selected tracks", body, async () => {
     const fields = { genre: el("bulk-tag-genre").value.trim(), album: el("bulk-tag-album").value.trim(), year: el("bulk-tag-year").value.trim() };
+    if (single) {
+      fields.artist = el("bulk-tag-artist").value.trim();
+      fields.title = el("bulk-tag-title").value.trim();
+    }
     let applied = 0;
     for (const id of ids) {
       for (const [field, value] of Object.entries(fields)) {

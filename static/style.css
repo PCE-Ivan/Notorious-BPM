@@ -565,6 +565,15 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
   display: flex; align-items: center; justify-content: center;
   z-index: 50;
 }
+/* customConfirm() is meant to be usable as a prompt from inside any other
+   already-open modal (e.g. the Duplicates panel's own "Remove" button),
+   not just from the base page -- every .modal-backdrop shares the same
+   z-index above, so two open at once stack by DOM order instead, and
+   #confirm-backdrop isn't reliably last in the document. Without this,
+   the confirm dialog can render fully behind whichever modal triggered
+   it: present and clickable in the DOM, but invisible and unreachable,
+   silently blocking whatever action asked for confirmation. */
+#confirm-backdrop { z-index: 150; }
 .modal {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -742,6 +751,19 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
   width: 0%;
   background: var(--accent);
   transition: width 0.2s ease-out;
+}
+/* For work too fast/unpredictable to report a real percentage (e.g. the
+   duplicate dry-run scan -- a handful of DB queries and stat() calls,
+   done before there's anything to count against) -- a sliding bar shows
+   "still working" without pretending to know how far along it is. */
+.dup-progress-fill.indeterminate {
+  width: 40% !important;
+  transition: none;
+  animation: dup-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes dup-progress-slide {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
 }
 .dup-details {
   margin-top: 12px;

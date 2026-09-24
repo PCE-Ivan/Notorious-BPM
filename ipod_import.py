@@ -593,15 +593,17 @@ def fix_staged_tags(staging_root, progress_cb=None):
 
 
 def fix_staged_art(staging_root, progress_cb=None):
-    """Best-effort Deezer cover-art backfill for staged tracks missing
-    embedded art -- iPod syncs frequently drop full-size art to save
-    device space even when the source library had it. Same
-    same-artist-candidate filtering app.py's _fetch_and_cache_art uses for
-    the real library's per-track "Fetch cover art" button, reused here
-    against files instead of a DB row + ART_CACHE_DIR."""
+    """Best-effort cover-art backfill for staged tracks missing embedded
+    art -- iPod syncs frequently drop full-size art to save device space
+    even when the source library had it. Tries several free, keyless
+    sources in order (see art_lookup.py -- Deezer, then iTunes Search,
+    then MusicBrainz+Cover Art Archive), same as app.py's
+    _fetch_and_cache_art for the real library's per-track "Fetch cover
+    art" button, reused here against files instead of a DB row +
+    ART_CACHE_DIR."""
     import time
     import urllib.request
-    import fill_genres
+    import art_lookup
 
     paths = [p for p in _staged_file_paths(staging_root) if not _has_embedded_art(p)]
     total = len(paths)
@@ -610,17 +612,7 @@ def fix_staged_art(staging_root, progress_cb=None):
         try:
             info = _read_tags_for_review(fpath)
             if info:
-                results = fill_genres._http_json(fill_genres.DEEZER_SEARCH, {
-                    "q": f'{(info["artist"] or "").strip()} {(info["title"] or "").strip()}'.strip(), "limit": 5,
-                })
-                candidates = (results or {}).get("data") or []
-                artist_lower = (info["artist"] or "").strip().lower()
-                same_artist = [
-                    c for c in candidates
-                    if artist_lower and artist_lower in (c.get("artist", {}).get("name") or "").strip().lower()
-                ]
-                best = (same_artist or candidates or [None])[0]
-                cover_url = best.get("album", {}).get("cover_big") if best else None
+                cover_url, _source = art_lookup.find_cover_url(info["artist"], info["title"])
                 if cover_url:
                     with urllib.request.urlopen(cover_url, timeout=10) as resp:
                         image_bytes = resp.read()

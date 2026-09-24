@@ -272,6 +272,7 @@ def _any_background_job_running():
         _ipod_artfill_state, _organize_state, _fill_genres_state,
         _fill_years_state, _unify_genre_state, _fix_artist_title_state,
         _deep_scan_state, _convert_state, _dup_clean_state,
+        _delete_tracks_state, _fill_art_state,
     ))
 
 
@@ -953,6 +954,70 @@ def fill_years_route():
 @app.route("/api/fill-years/progress")
 def fill_years_progress():
     return jsonify(_fill_years_state)
+
+
+_fill_art_state = {"running": False, "done": 0, "total": 0, "fixed": 0, "result": None, "error": None}
+_fill_art_lock = threading.Lock()
+
+
+def _run_fill_art_bg(track_ids):
+    def progress_cb(done, total, fixed):
+        _fill_art_state["done"] = done
+        _fill_art_state["total"] = total
+        _fill_art_state["fixed"] = fixed
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            if track_ids:
+                placeholders = ",".join("?" * len(track_ids))
+                rows = conn.execute(
+                    f"SELECT id, artist, title FROM tracks WHERE has_art=0 AND id IN ({placeholders})", track_ids,
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT id, artist, title FROM tracks WHERE has_art=0").fetchall()
+            total = len(rows)
+            fixed = 0
+            for i, row in enumerate(rows):
+                try:
+                    ok, _err = _fetch_and_cache_art(conn, row["id"], row["artist"], row["title"])
+                    if ok:
+                        fixed += 1
+                except Exception:
+                    pass
+                progress_cb(i + 1, total, fixed)
+                time.sleep(0.15)  # be polite to the free APIs in art_lookup.py
+            _fill_art_state["result"] = {"checked": total, "fixed": fixed}
+        finally:
+            conn.close()
+    except Exception as e:
+        _fill_art_state["error"] = str(e)
+    finally:
+        _fill_art_state["running"] = False
+
+
+@app.route("/api/fill-art", methods=["POST"])
+def fill_art_route():
+    """Best-effort cover art for every track the deep scan found missing
+    it (has_art=0), tried across several free sources -- see
+    art_lookup.py. Pass {"track_ids": [...]} to scope it (e.g. to exactly
+    the deep scan's own "Missing cover art" list); omit it to run across
+    the whole library."""
+    data = request.get_json(force=True, silent=True) or {}
+    track_ids = data.get("track_ids") or None
+    with _library_lock, _fill_art_lock:
+        if _fill_art_state["running"]:
+            return jsonify({"started": False, "error": "Already running"})
+        _fill_art_state.update(running=True, done=0, total=0, fixed=0, result=None, error=None)
+        close_db(None)
+        threading.Thread(target=_run_fill_art_bg, args=(track_ids,), daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/fill-art/progress")
+def fill_art_progress():
+    return jsonify(_fill_art_state)
 
 
 _unify_genre_state = {"running": False, "done": 0, "total": 0, "updated": 0, "result": None, "error": None}
@@ -2540,34 +2605,20 @@ def art(track_id):
 
 
 def _fetch_and_cache_art(conn, track_id, artist, title):
-    """Best-effort cover art from Deezer for a track with no embedded art --
-    caches straight into ART_CACHE_DIR (the same place get_art already
-    checks first) without ever touching the source audio file, so a bad
-    match or a failed write can't corrupt anything. `conn` just needs
-    execute()/commit() -- both the per-request g.db and a plain
-    sqlite3.connect() (used by the iPod-import art backfill, which runs
-    off a background thread with no request/g of its own) satisfy that.
-    Returns (True, None) on success, else (False, error_message) -- callers
-    doing this in bulk just check the bool and move on to the next track."""
-    import fill_genres
-    # Deezer's quoted artist:"X" track:"Y" advanced-filter syntax (what
-    # this used to send) now reliably returns zero results -- verified
-    # against several well-known tracks, not something specific to any one
-    # song here -- so this uses the same plain-query + same-artist-filter
-    # approach fill_genres._pick_genre already relies on for its own Deezer
-    # search, rather than a stricter filter the API no longer honors.
-    results = fill_genres._http_json(fill_genres.DEEZER_SEARCH, {
-        "q": f'{(artist or "").strip()} {(title or "").strip()}'.strip(),
-        "limit": 5,
-    })
-    candidates = (results or {}).get("data") or []
-    artist_lower = (artist or "").strip().lower()
-    same_artist = [
-        c for c in candidates
-        if artist_lower and artist_lower in (c.get("artist", {}).get("name") or "").strip().lower()
-    ]
-    best = (same_artist or candidates or [None])[0]
-    cover_url = best.get("album", {}).get("cover_big") if best else None
+    """Best-effort cover art for a track with no embedded art, tried across
+    several free, keyless sources in order (see art_lookup.py -- Deezer,
+    then iTunes Search, then MusicBrainz+Cover Art Archive) since no single
+    one of them has everything. Caches straight into ART_CACHE_DIR (the
+    same place get_art already checks first) without ever touching the
+    source audio file, so a bad match or a failed write can't corrupt
+    anything. `conn` just needs execute()/commit() -- both the per-request
+    g.db and a plain sqlite3.connect() (used by the iPod-import art
+    backfill, which runs off a background thread with no request/g of its
+    own) satisfy that. Returns (True, None) on success, else (False,
+    error_message) -- callers doing this in bulk just check the bool and
+    move on to the next track."""
+    import art_lookup
+    cover_url, _source = art_lookup.find_cover_url(artist, title)
     if not cover_url:
         return False, "No match found"
 
@@ -2813,10 +2864,42 @@ def delete_rated():
     return jsonify({"ok": True, "deleted": deleted, "errors": errors})
 
 
+_delete_tracks_state = {"running": False, "done": 0, "total": 0, "deleted": 0, "errors": None, "error": None}
+_delete_tracks_lock = threading.Lock()
+
+
+def _run_delete_tracks_bg(rows):
+    def progress_cb(done, total):
+        _delete_tracks_state["done"] = done
+        _delete_tracks_state["total"] = total
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            deleted, errors = _delete_track_rows(conn, rows, progress_cb=progress_cb)
+            _delete_tracks_state["deleted"] = deleted
+            _delete_tracks_state["errors"] = errors
+        finally:
+            conn.close()
+    except Exception as e:
+        _delete_tracks_state["error"] = str(e)
+    finally:
+        _invalidate_dup_plan_cache()
+        _delete_tracks_state["running"] = False
+
+
 @app.route("/api/delete-tracks", methods=["POST"])
 def delete_tracks_route():
     """Move an explicit set of tracks to trash by id -- used by the
-    duplicate finder once the user has picked which version(s) to remove."""
+    duplicate review screen once the user has picked which version(s) to
+    remove. Runs in the background with progress polling, same shape as
+    every other bulk action here: when the music folder is on a different
+    volume than the app's own data, each removal is a real cross-
+    filesystem copy, not a fast rename -- for more than a few files that
+    can take a real, visible amount of time, which a single blocking
+    request with no progress showed as nothing but a static "Deleting…"
+    for however long it took."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or []
     if not track_ids or not all(isinstance(t, int) for t in track_ids):
@@ -2824,12 +2907,21 @@ def delete_tracks_route():
 
     db = get_db()
     placeholders = ",".join("?" * len(track_ids))
-    rows = db.execute(
+    rows = [dict(r) for r in db.execute(
         f"SELECT id, path, artist, title, album FROM tracks WHERE id IN ({placeholders})", track_ids
-    ).fetchall()
-    deleted, errors = _delete_track_rows(db, rows)
-    _invalidate_dup_plan_cache()
-    return jsonify({"ok": True, "deleted": deleted, "errors": errors})
+    ).fetchall()]
+    with _library_lock, _delete_tracks_lock:
+        if _delete_tracks_state["running"]:
+            return jsonify({"started": False, "error": "Already running"})
+        _delete_tracks_state.update(running=True, done=0, total=len(rows), deleted=0, errors=None, error=None)
+        close_db(None)
+        threading.Thread(target=_run_delete_tracks_bg, args=(rows,), daemon=True).start()
+    return jsonify({"started": True, "total": len(rows)})
+
+
+@app.route("/api/delete-tracks/progress")
+def delete_tracks_progress():
+    return jsonify(_delete_tracks_state)
 
 
 def _reindex_single_file(db, fpath, rel_path):
