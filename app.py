@@ -370,6 +370,22 @@ def _start_ipod_import_bg(mount, ipod_name, staging_root, existing_index):
         return True
 
 
+def _existing_dup_index():
+    """(normalized_artist, normalized_title) -> {"path", "duration"} for the
+    real library right now -- same (artist, title) normalization the
+    Duplicates feature and the staging/move step already use, so a song
+    already in the library under any edition ("Live", "Remastered", a
+    different release...) is treated as the same track. Shared by every
+    call site that needs to know what's already there before copying iPod
+    tracks -- built fresh each time so the skip decision reflects the
+    library as it stands right then."""
+    db = get_db()
+    return {
+        (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"])): {"path": r["path"], "duration": r["duration"]}
+        for r in db.execute("SELECT artist, title, path, duration FROM tracks").fetchall()
+    }
+
+
 @app.route("/api/ipod/detect")
 def ipod_detect():
     # See _run_ipod_import_bg's comment -- no importlib.reload here, it
@@ -400,26 +416,25 @@ def ipod_import_route():
         return jsonify({"started": False, "error": "Already running"})
     # A batch from an earlier import that was never reviewed/moved takes
     # priority over starting a new, overlapping one -- the frontend offers
-    # to resume that review instead (see runIpodImport() in app.js).
+    # to resume that review instead (see runIpodImport() in app.js). One
+    # that never finished copying (pending[i]["complete"] is False -- see
+    # ipod_import.COMPLETE_MARKER) still takes priority over starting a
+    # fresh import over it, but needs a copy to actually finish it, which
+    # the review screen's "Continue copying" button drives via
+    # /api/ipod/staging/continue-import rather than here.
     pending = ipod_import.list_pending_batches(MUSIC_DIR)
     if pending:
-        return jsonify({"started": False, "error": "A previous import is already staged and waiting for review.", "pending": pending})
+        message = (
+            "A previous copy didn't finish -- reconnect the iPod and continue it from the review screen."
+            if not pending[0]["complete"] else
+            "A previous import is already staged and waiting for review."
+        )
+        return jsonify({"started": False, "error": message, "pending": pending})
     info = ipod_import.find_ipod()
     if not info:
         return jsonify({"started": False, "error": "No iPod Classic found. Make sure it's connected and shows “Do Not Disconnect.”"})
     staging_root = ipod_import.staging_root_for(MUSIC_DIR, info["name"])
-    # Same (artist, title) normalization the Duplicates feature and the
-    # later staging/move step already use -- a song already in the
-    # library under any edition ("Live", "Remastered", a different
-    # release...) is treated as the same track. Built once, synchronously,
-    # right before the copy starts, so the skip decision reflects the
-    # library as it stands at import time.
-    db = get_db()
-    existing_index = {
-        (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"])): {"path": r["path"], "duration": r["duration"]}
-        for r in db.execute("SELECT artist, title, path, duration FROM tracks").fetchall()
-    }
-    started = _start_ipod_import_bg(info["mount"], info["name"], staging_root, existing_index)
+    started = _start_ipod_import_bg(info["mount"], info["name"], staging_root, _existing_dup_index())
     return jsonify({"started": started, "error": None if started else "Already running"})
 
 
@@ -447,16 +462,59 @@ def _resolve_staging_root(ipod_name):
 @app.route("/api/ipod/staging")
 def ipod_staging_list():
     """The review screen's data source -- reads tags straight off the
-    staged files (no tracks-table rows exist for them yet)."""
+    staged files (no tracks-table rows exist for them yet). `complete`
+    tells the review screen whether this batch's copy actually finished
+    (ipod_import.COMPLETE_MARKER) or was interrupted partway and still
+    needs another copy pass before the batch shown here can be trusted to
+    be the whole thing. `expected_total` is a best-effort track count for
+    an incomplete batch's "N of M copied" -- only available when the same
+    iPod is currently reconnected, since that's the only place the total
+    is known once the batch's own copy never got to record it."""
     import ipod_import
     name, staging_root = _resolve_staging_root(request.args.get("ipod_name"))
     if not staging_root or not os.path.isdir(staging_root):
-        return jsonify({"ipod_name": name, "staging_path": staging_root, "tracks": []})
+        return jsonify({"ipod_name": name, "staging_path": staging_root, "tracks": [], "complete": True, "expected_total": None})
+    complete = ipod_import.is_batch_complete(staging_root)
+    expected_total = None
+    if not complete:
+        info = ipod_import.find_ipod()
+        if info and info["name"] == name:
+            expected_total = info["track_count"]
     return jsonify({
         "ipod_name": name,
         "staging_path": staging_root,
         "tracks": ipod_import.list_staged_tracks(staging_root),
+        "complete": complete,
+        "expected_total": expected_total,
     })
+
+
+@app.route("/api/ipod/staging/continue-import", methods=["POST"])
+def ipod_staging_continue_import():
+    """Resumes a copy that was interrupted partway (see ipod_staging_list's
+    docstring) -- re-runs import_tracks against the exact same staging_root
+    the earlier attempt used. Safe/cheap to re-run: import_tracks already
+    skips any destination file that's already fully copied (same size as
+    its source), so this only copies what's actually still missing. Shares
+    _ipod_state/_start_ipod_import_bg with a fresh /api/ipod/import so the
+    review screen's "Continue copying" button can reuse the exact same
+    /api/ipod/import-progress polling a first-time copy already uses."""
+    if not MUSIC_DIR or not os.path.isdir(MUSIC_DIR):
+        return jsonify({"started": False, "error": "Set a music folder first (the Folder button), then try again."})
+    import ipod_import
+    if _ipod_state["running"]:
+        return jsonify({"started": False, "error": "Already running"})
+    data = request.get_json(force=True, silent=True) or {}
+    name, staging_root = _resolve_staging_root(data.get("ipod_name"))
+    if not staging_root or not os.path.isdir(staging_root):
+        return jsonify({"started": False, "error": "No staged import to continue"})
+    if ipod_import.is_batch_complete(staging_root):
+        return jsonify({"started": False, "error": "That batch already finished copying."})
+    info = ipod_import.find_ipod()
+    if not info or info["name"] != name:
+        return jsonify({"started": False, "error": f"Reconnect the “{name}” iPod to finish copying the rest of this batch."})
+    started = _start_ipod_import_bg(info["mount"], info["name"], staging_root, _existing_dup_index())
+    return jsonify({"started": started, "error": None if started else "Already running"})
 
 
 @app.route("/api/ipod/staging/reveal", methods=["POST"])

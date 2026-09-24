@@ -162,9 +162,23 @@ def _default_normalize_key(artist, title):
 # folder" to a human glancing at the music folder in Finder.
 STAGING_DIRNAME = ".ipod_staging"
 
+# Written into a batch's staging_root only once import_tracks has walked
+# every track it found in the iTunesDB without an unhandled error -- its
+# *absence* is what tells a batch that's genuinely done and waiting for
+# review apart from one where the copy was interrupted partway (e.g. a real
+# Classic iPod dropping off USB mid-copy: `OSError: [Errno 6] Device not
+# configured`, confirmed happening in practice, with the iPod itself still
+# mounted and healthy afterward) and, on disk, looks identical to a
+# finished batch otherwise. See is_batch_complete/import_tracks below.
+COMPLETE_MARKER = ".import_complete"
+
 
 def staging_root_for(music_dir, ipod_name):
     return os.path.join(music_dir, STAGING_DIRNAME, _safe_component(ipod_name, "iPod"))
+
+
+def is_batch_complete(staging_root):
+    return os.path.isfile(os.path.join(staging_root, COMPLETE_MARKER))
 
 
 def list_pending_batches(music_dir):
@@ -172,7 +186,10 @@ def list_pending_batches(music_dir):
     folder name under STAGING_DIRNAME -- lets app.py offer to resume a
     review instead of silently starting a second overlapping import, and
     lets it find "the" batch to act on when a caller doesn't say which one
-    (there's normally at most one)."""
+    (there's normally at most one). `complete` tells app.py whether this is
+    a finished batch simply waiting for review, or one where copying was
+    interrupted and needs to be re-run against the same staging_root before
+    review can be trusted to show the whole batch."""
     root = os.path.join(music_dir, STAGING_DIRNAME)
     if not os.path.isdir(root):
         return []
@@ -183,15 +200,27 @@ def list_pending_batches(music_dir):
             continue
         count = len(_staged_file_paths(staging_root))
         if count:
-            batches.append({"name": name, "count": count})
+            batches.append({"name": name, "count": count, "complete": is_batch_complete(staging_root)})
     return batches
 
 
 def _staged_file_paths(staging_root):
+    from scan_library import _is_real_audio_file
+
     paths = []
     for root, _dirs, files in os.walk(staging_root):
         for fname in files:
-            if os.path.splitext(fname)[1].lower() in AUDIO_EXTS:
+            # scan_library.py already solved this exact problem for its
+            # own library walk: on any non-HFS/APFS filesystem (this
+            # staging root lives under MUSIC_DIR, which for an external
+            # FAT32/exFAT drive very much qualifies), macOS writes a
+            # "._Song.m4a" AppleDouble sidecar next to every real file to
+            # hold what it can't store natively. It matches AUDIO_EXTS
+            # just like the real file -- without this check, every staged
+            # count and move silently doubles, and mutagen/shutil choke on
+            # these non-audio stand-ins (confirmed against a real import:
+            # move_staged_to_library errored out on one mid-batch).
+            if os.path.splitext(fname)[1].lower() in AUDIO_EXTS and _is_real_audio_file(fname):
                 paths.append(os.path.join(root, fname))
     return paths
 
@@ -284,6 +313,13 @@ def import_tracks(mount, staging_root, music_dir, existing_index=None, normalize
     itunesdb_path = os.path.join(mount, "iPod_Control", "iTunes", "iTunesDB")
     tracks = parse_itunesdb(itunesdb_path, mount)
     os.makedirs(staging_root, exist_ok=True)
+    # Cleared up front and only written back at the very end (see
+    # COMPLETE_MARKER above) -- a re-run against a staging_root left over
+    # from an interrupted previous attempt must not still look "done" to
+    # is_batch_complete() while *this* run is itself in progress.
+    marker_path = os.path.join(staging_root, COMPLETE_MARKER)
+    if os.path.exists(marker_path):
+        os.remove(marker_path)
 
     copied_paths = []
     already_staged = 0
@@ -320,6 +356,14 @@ def import_tracks(mount, staging_root, music_dir, existing_index=None, normalize
 
         if progress_cb:
             progress_cb(i + 1, total)
+
+    # Reached only once every track has been accounted for (copied, already
+    # staged, or a reported duplicate) with no exception along the way --
+    # an interruption partway through (see COMPLETE_MARKER above) leaves
+    # this unwritten, which is exactly the signal list_pending_batches and
+    # app.py need.
+    with open(marker_path, "w"):
+        pass
 
     return {
         "total": total,
@@ -633,5 +677,11 @@ def move_staged_to_library(staging_root, music_dir, existing_keys=None, normaliz
         if progress_cb:
             progress_cb(i + 1, total)
 
+    # Otherwise this is the one file left behind that keeps staging_root
+    # from being empty (see COMPLETE_MARKER above), so it'd never get
+    # cleaned up by _remove_empty_dirs below even once every track's moved.
+    marker_path = os.path.join(staging_root, COMPLETE_MARKER)
+    if os.path.isfile(marker_path):
+        os.remove(marker_path)
     _remove_empty_dirs(staging_root)
     return {"total": total, "moved_paths": moved_paths, "duplicates": duplicates}

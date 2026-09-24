@@ -2328,6 +2328,8 @@ function resetIpodSteps() {
   el("ipod-review-panel").classList.add("hidden");
   el("ipod-review-list").innerHTML = "";
   el("ipod-review-action-status").textContent = "";
+  el("ipod-incomplete-banner").classList.add("hidden");
+  ipodReviewState.complete = true;
   el("ipod-staging-path").textContent = "";
   el("ipod-summary").classList.add("hidden");
   el("ipod-summary-list").innerHTML = "";
@@ -2428,7 +2430,17 @@ function renderIpodSkippedTrack(d) {
 // The one active staged batch this modal is currently working with --
 // resolved once (from the import result, or from an existing pending
 // batch when resuming) and reused for every /ipod/staging/* call after.
-const ipodReviewState = { ipodName: null };
+// `complete` tracks the last-known copy-completeness (see loadIpodReviewList)
+// so syncIpodMoveButton can re-apply the "still copying" gate on
+// ipod-move-to-library even after something else (runIpodStagingFix's own
+// disable/re-enable around a fix) has touched that button in between.
+const ipodReviewState = { ipodName: null, complete: true };
+
+function syncIpodMoveButton() {
+  const moveBtn = el("ipod-move-to-library");
+  moveBtn.disabled = !ipodReviewState.complete;
+  moveBtn.title = ipodReviewState.complete ? "" : "Finish copying first — some tracks from this batch are still missing.";
+}
 
 async function loadIpodReviewList() {
   const data = await api(`/ipod/staging?ipod_name=${encodeURIComponent(ipodReviewState.ipodName || "")}`);
@@ -2446,8 +2458,56 @@ async function loadIpodReviewList() {
   el("ipod-review-heading").textContent = tracks.length
     ? `${tracks.length} track${tracks.length === 1 ? "" : "s"} waiting for review — nothing here is in your library yet.`
     : "Nothing staged to review.";
+
+  // data.complete is false when a previous copy was interrupted partway
+  // (see ipod_import.COMPLETE_MARKER) -- `tracks` here is only what made
+  // it in before that happened, not the whole batch, so moving it to the
+  // library now would silently leave the rest behind for good.
+  const banner = el("ipod-incomplete-banner");
+  ipodReviewState.complete = data.complete !== false;
+  if (!ipodReviewState.complete) {
+    el("ipod-incomplete-text").textContent = data.expected_total
+      ? `Copying didn't finish last time — ${tracks.length} of ${data.expected_total} tracks copied so far.`
+      : `Copying didn't finish last time — ${tracks.length} track${tracks.length === 1 ? "" : "s"} copied so far. Reconnect the iPod to see the full count.`;
+    banner.classList.remove("hidden");
+  } else {
+    banner.classList.add("hidden");
+  }
+  syncIpodMoveButton();
   return tracks.length;
 }
+
+el("ipod-continue-copy").addEventListener("click", async () => {
+  const btn = el("ipod-continue-copy");
+  btn.disabled = true;
+  el("ipod-incomplete-text").textContent = "Continuing…";
+  try {
+    const started = await api("/ipod/staging/continue-import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ipod_name: ipodReviewState.ipodName }),
+    });
+    if (!started.started) {
+      showToast(started.error || "Couldn't continue copying.", { kind: "error" });
+      await loadIpodReviewList();
+      return;
+    }
+    showIpodProgress(0, 0);
+    const status = await pollProgress("/ipod/import-progress", (s) => {
+      el("ipod-incomplete-text").textContent = s.total ? `Continuing — ${s.done} / ${s.total}` : "Continuing…";
+      showIpodProgress(s.done, s.total);
+      return s.running;
+    });
+    hideIpodProgress();
+    if (status.error) showToast(status.error, { kind: "error" });
+    await loadIpodReviewList();
+  } catch (e) {
+    hideIpodProgress();
+    showToast(e.message || "Couldn't continue copying.", { kind: "error" });
+  } finally {
+    btn.disabled = false;
+  }
+});
 el("ipod-reveal-staging").addEventListener("click", async () => {
   try {
     const result = await api("/ipod/staging/reveal", {
@@ -2493,7 +2553,11 @@ async function runIpodStagingFix(action, label) {
     status.textContent = "";
     await loadIpodReviewList();
   } finally {
+    // loadIpodReviewList (above) already set ipod-move-to-library's
+    // disabled state correctly, but this blanket re-enable would otherwise
+    // clobber it back to enabled if the batch is still incomplete.
     buttons.forEach((b) => { b.disabled = false; });
+    syncIpodMoveButton();
   }
 }
 el("ipod-fix-names").addEventListener("click", () => runIpodStagingFix("names", "Fixing names"));
@@ -2641,7 +2705,9 @@ async function runIpodImport() {
     // overlapping one.
     if (!started.started && started.pending && started.pending.length) {
       setIpodStep("detect", "done", "");
-      setIpodStep("copy", "done", "Resuming a previous import");
+      setIpodStep("copy", "done", started.pending[0].complete === false
+        ? "A previous copy didn't finish — see below"
+        : "Resuming a previous import");
       await enterIpodReview(started.pending[0].name);
       return;
     }

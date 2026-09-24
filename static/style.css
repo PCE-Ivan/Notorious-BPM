@@ -694,6 +694,15 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
 .ipod-skipped-track-bitrates { font-size: 11px; color: var(--text-dim); }
 .ipod-skipped-track-bitrates .better { color: var(--tile-green); font-weight: 600; }
 
+.ipod-incomplete-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 12px; padding: 8px 10px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border); border-left: 3px solid var(--tile-orange);
+  border-radius: var(--radius);
+}
+.ipod-incomplete-banner p { margin: 0; font-size: 12px; color: var(--text); }
+
 .dup-progress-fill {
   height: 100%;
   width: 0%;
