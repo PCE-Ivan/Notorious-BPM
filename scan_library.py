@@ -154,6 +154,13 @@ def build_schema(conn):
             position INTEGER,
             PRIMARY KEY (playlist_id, track_id)
         );
+
+        -- Small per-library key/value store (currently just music_dir) --
+        -- see library_manager.py, which is what actually reads/writes it.
+        CREATE TABLE IF NOT EXISTS library_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
         """
     )
     cols = [r[1] for r in conn.execute("PRAGMA table_info(tracks)").fetchall()]

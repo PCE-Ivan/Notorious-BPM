@@ -192,6 +192,38 @@ html, body {
   box-sizing: border-box;
 }
 .stats { color: var(--text-dim); font-size: 12px; }
+
+.library-control { position: relative; flex-shrink: 0; }
+#library-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
+.library-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
+  min-width: 220px; max-width: 320px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.library-menu-item {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  padding: 8px 10px; border-radius: var(--radius); font-size: 13px; color: var(--text);
+  cursor: pointer;
+}
+.library-menu-item:hover, .library-menu-item:focus-visible { background: var(--bg-hover); }
+.library-menu-divider { height: 1px; background: var(--border); margin: 4px 2px; }
+.library-menu-label { font-size: 11px; color: var(--text-dim); padding: 4px 10px 2px; text-transform: uppercase; letter-spacing: .04em; }
+.library-recent-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.library-recent-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 7px 10px; border-radius: var(--radius); font-size: 13px; color: var(--text);
+  cursor: pointer; overflow: hidden;
+}
+.library-recent-item:hover, .library-recent-item:focus-visible { background: var(--bg-hover); }
+.library-recent-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-recent-item.missing { color: var(--text-dim); cursor: not-allowed; }
+.library-recent-item.missing:hover { background: none; }
+.library-recent-item .missing-tag { font-size: 11px; color: var(--danger); flex-shrink: 0; }
+.library-recent-empty { font-size: 12px; color: var(--text-dim); padding: 6px 10px; }
 .current-folder {
   color: var(--text-dim);
   font-size: 10px;
@@ -685,6 +717,8 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
 .ipod-review-track-art { flex-shrink: 0; font-size: 11px; color: var(--text-dim); width: 16px; text-align: center; }
 .ipod-review-more { text-align: center; font-size: 12px; color: var(--text-dim); padding: 8px 0 2px; }
 .ipod-review-footer { display: flex; justify-content: flex-end; }
+.ipod-library-choice-actions { display: flex; flex-direction: column; gap: 8px; }
+.ipod-library-choice-actions button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .ipod-staging-path-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .ipod-staging-path {
   flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;

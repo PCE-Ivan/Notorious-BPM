@@ -23,6 +23,19 @@ import urllib.request
 from flask import Flask, g, jsonify, request, send_file, abort, send_from_directory, make_response, Response
 
 import config as jukebox_config
+from fs_safety import safe_move
+import library_manager
+
+# Must run before MUSIC_DIR/DB_PATH below are computed -- resolves which
+# library is "current" (running the one-time legacy migration the first
+# time this runs post-update) and sets JUKEBOX_DB_PATH/JUKEBOX_MUSIC_DIR
+# accordingly, so both this module's own globals just below AND every
+# other module's identical os.environ.get("JUKEBOX_DB_PATH", ...)-based
+# globals (scan_library.py, organize_by_artist.py, fill_genres.py, etc --
+# all already re-read via the importlib.reload() calls sprinkled through
+# this file before each use) resolve to the right library from the very
+# first request, with no changes needed in any of those other modules.
+library_manager.resolve_startup()
 
 MUSIC_DIR = jukebox_config.get_music_dir()
 DEFAULT_DB_PATH = os.path.join(jukebox_config.get_app_data_dir(), "library.db")
@@ -234,6 +247,34 @@ SMART_PLAYLIST_NAME_MAX_LEN = 200
 
 # ---------------------------------------------------------------- browsing --
 
+# Guards switching to a different library against every background job
+# below, in both directions: _switch_library holds this for its entire
+# duration and refuses to run while any job is active, AND every job's own
+# _start_*_bg function below also takes this (briefly, just around its own
+# "check + flip running=True" step) before starting -- so a switch can only
+# ever complete when nothing is running, and nothing new can start while a
+# switch is in progress. That two-way guarantee matters because several of
+# the _run_*_bg thread bodies below re-read the module-level MUSIC_DIR/
+# DB_PATH globals fresh at multiple points *during* a job that can run for
+# minutes, not just once at thread-start -- a one-directional "no jobs
+# running" check alone wouldn't stop a job from starting in the instant
+# after that check and then reading a library out from under a switch that
+# lands mid-job. _any_background_job_running() (defined here, referencing
+# the state dicts declared further down -- fine in Python, since it's only
+# ever called after the whole module has loaded) is every one of this
+# file's 13 job-state dicts' "running" flag.
+_library_lock = threading.Lock()
+
+
+def _any_background_job_running():
+    return any(state.get("running") for state in (
+        _scan_state, _ipod_state, _staging_fix_state, _staging_move_state,
+        _ipod_artfill_state, _organize_state, _fill_genres_state,
+        _fill_years_state, _unify_genre_state, _fix_artist_title_state,
+        _deep_scan_state, _convert_state, _dup_clean_state,
+    ))
+
+
 # Shared by /api/rescan and /api/choose-folder -- both ultimately just run
 # scan_library.scan() over MUSIC_DIR, the only difference being whether the
 # folder itself changed first. A full scan of a large library (tens of
@@ -273,7 +314,7 @@ def _start_scan_bg(force_prune=False):
     """Returns False (and starts nothing) if a scan is already running --
     same "already running" convention as fill-genres/fill-years, not an
     error, just something the caller can tell the user."""
-    with _scan_lock:
+    with _library_lock, _scan_lock:
         if _scan_state["running"]:
             return False
         _scan_state.update(running=True, done=0, total=0, result=None, error=None)
@@ -362,7 +403,7 @@ def _run_ipod_import_bg(mount, ipod_name, staging_root, existing_index):
 
 def _start_ipod_import_bg(mount, ipod_name, staging_root, existing_index):
     """Same "already running" convention as the scan/organize jobs above."""
-    with _ipod_lock:
+    with _library_lock, _ipod_lock:
         if _ipod_state["running"]:
             return False
         _ipod_state.update(running=True, done=0, total=0, result=None, error=None, ipod_name=ipod_name)
@@ -570,7 +611,7 @@ def ipod_staging_fix():
     _name, staging_root = _resolve_staging_root(data.get("ipod_name"))
     if not staging_root or not os.path.isdir(staging_root):
         return jsonify({"started": False, "error": "No staged import to fix"})
-    with _staging_fix_lock:
+    with _library_lock, _staging_fix_lock:
         if _staging_fix_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _staging_fix_state.update(running=True, action=action, done=0, total=0, result=None, error=None)
@@ -640,7 +681,7 @@ def ipod_staging_move():
     _name, staging_root = _resolve_staging_root(data.get("ipod_name"))
     if not staging_root or not os.path.isdir(staging_root):
         return jsonify({"started": False, "error": "No staged import to move"})
-    with _staging_move_lock:
+    with _library_lock, _staging_move_lock:
         if _staging_move_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _staging_move_state.update(running=True, done=0, total=0, result=None, error=None)
@@ -731,7 +772,7 @@ def _run_ipod_artfill_bg(rel_paths):
 def ipod_backfill_art():
     data = request.get_json(force=True, silent=True) or {}
     rel_paths = data.get("paths") or []
-    with _ipod_artfill_lock:
+    with _library_lock, _ipod_artfill_lock:
         if _ipod_artfill_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _ipod_artfill_state.update(running=True, done=0, total=0, result=None, error=None)
@@ -808,7 +849,7 @@ def _run_organize_bg():
 
 
 def _start_organize_bg():
-    with _organize_lock:
+    with _library_lock, _organize_lock:
         if _organize_state["running"]:
             return False
         _organize_state.update(running=True, done=0, total=0, moved=0, result=None, error=None)
@@ -856,7 +897,7 @@ def fill_genres_route():
     # 200 either way (not a 409) -- "already running" is an expected,
     # normal outcome for the frontend to branch on, not a request failure,
     # and the shared api() helper throws on any non-2xx response.
-    with _fill_genres_lock:
+    with _library_lock, _fill_genres_lock:
         if _fill_genres_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _fill_genres_state.update(running=True, done=0, total=0, found=0, result=None, error=None)
@@ -900,7 +941,7 @@ def fill_years_route():
     view); omit it to run across the whole library."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
-    with _fill_years_lock:
+    with _library_lock, _fill_years_lock:
         if _fill_years_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _fill_years_state.update(running=True, done=0, total=0, updated=0, result=None, error=None)
@@ -950,7 +991,7 @@ def unify_artist_genre_preview():
 def unify_artist_genre_route():
     """For every artist with more than one genre across their tracks, picks
     the most common one and writes it into every track by that artist."""
-    with _unify_genre_lock:
+    with _library_lock, _unify_genre_lock:
         if _unify_genre_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _snapshot_db()
@@ -1002,7 +1043,7 @@ def fix_artist_title_route():
     """Corrects artist/title spelling and capitalization toward Deezer's
     catalog, Picard-style -- see fix_artist_title.py for exactly what is
     and isn't considered safe to auto-correct."""
-    with _fix_artist_title_lock:
+    with _library_lock, _fix_artist_title_lock:
         if _fix_artist_title_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _snapshot_db()
@@ -1261,7 +1302,7 @@ def tags_deep_scan():
     db = get_db()
     rows = [dict(r) for r in db.execute("SELECT id, path FROM tracks").fetchall()]
 
-    with _deep_scan_lock:
+    with _library_lock, _deep_scan_lock:
         if _deep_scan_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _deep_scan_state.update(running=True, done=0, total=len(rows), result=None, error=None)
@@ -1392,6 +1433,44 @@ def _pick_folder_dialog(prompt="Select the music folder for Notorious B.P.M. to 
     return picked or None
 
 
+def _pick_save_file_dialog(prompt, default_name):
+    """Native save-file picker, per OS -- same AppleScript-vs-Tk split as
+    _pick_folder_dialog just above, for "New Library" choosing where to
+    save the library file itself. (The existing "Backup" export button
+    reaches a similar native dialog through the pywebview JS-API bridge in
+    desktop_macos.py/launcher.py instead -- that's a difference in how that
+    feature happened to get built, not a technical requirement; a plain
+    Flask route works exactly the same way _pick_folder_dialog's own
+    osascript call already does.) Returns the picked path, or None if
+    cancelled."""
+    if sys.platform == "darwin":
+        escaped_prompt = prompt.replace('"', '\\"')
+        escaped_name = default_name.replace('"', '\\"')
+        result = subprocess.run(
+            ["osascript", "-e",
+             f'POSIX path of (choose file name with prompt "{escaped_prompt}" default name "{escaped_name}")'],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        picked = filedialog.asksaveasfilename(
+            title=prompt, initialfile=default_name,
+            defaultextension=library_manager.LIBRARY_EXT,
+            filetypes=[("Notorious B.P.M. Library", f"*{library_manager.LIBRARY_EXT}")],
+        )
+    finally:
+        root.destroy()
+    return picked or None
+
+
 @app.route("/api/choose-folder", methods=["POST"])
 def choose_folder():
     global MUSIC_DIR
@@ -1400,7 +1479,10 @@ def choose_folder():
         return jsonify({"ok": False, "cancelled": True})
 
     changed = picked != MUSIC_DIR
-    jukebox_config.update_config(lambda cfg: cfg.__setitem__("music_dir", picked))
+    # Into the *current* library's own metadata, not the flat config key --
+    # that key stops meaning anything once multiple libraries exist (kept
+    # only for the one-time legacy-migration check in library_manager.py).
+    library_manager.write_music_dir(DB_PATH, picked)
     MUSIC_DIR = picked
     os.environ["JUKEBOX_MUSIC_DIR"] = picked
 
@@ -1434,6 +1516,140 @@ def choose_folder():
 
     started = _start_scan_bg()
     return jsonify({"ok": True, "changed": changed, "music_dir": picked, "started": started})
+
+
+# ------------------------------------------------------------------ library --
+# Multiple, independent, switchable libraries -- each one a single .nbpmlib
+# SQLite file the user names and saves wherever they like (an external
+# drive, anywhere), holding just the catalog (tags, playlists, ratings) and
+# its own music_dir pointer; music files themselves stay wherever they are.
+# See library_manager.py for the config/metadata side of this; everything
+# here is the runtime side -- actually swapping which DB/folder the rest of
+# this file's ~44 routes are reading and writing.
+
+def _switch_library(db_path, music_dir):
+    """Switches every route in this file over to a different library.
+    Refuses while any background job is running, and holds _library_lock
+    for its own whole duration so a job can't sneak in and start mid-
+    switch either -- see _library_lock's own comment near the top of this
+    file for why both directions matter."""
+    global DB_PATH, MUSIC_DIR, ART_CACHE_DIR, TRASH_DIR, BACKUP_DIR, _schema_ready
+    with _library_lock:
+        if _any_background_job_running():
+            return {"ok": False, "error": "A background job is running — wait for it to finish, then try again."}
+
+        _snapshot_db()  # snapshots the library being LEFT, via its own (still current) BACKUP_DIR
+        close_db(None)
+
+        comp = library_manager.companion_dir(db_path)
+        new_art_cache = os.path.join(comp, "art_cache")
+        new_trash = os.path.join(comp, "trash")
+        new_backup = os.path.join(comp, "backups")
+        os.makedirs(new_art_cache, exist_ok=True)
+        os.makedirs(new_trash, exist_ok=True)
+        os.makedirs(new_backup, exist_ok=True)
+
+        DB_PATH = db_path
+        MUSIC_DIR = music_dir
+        ART_CACHE_DIR = new_art_cache
+        TRASH_DIR = new_trash
+        BACKUP_DIR = new_backup
+        # Without this, get_db() never runs _ensure_deep_scan_columns()
+        # again (it's gated to run once per process) -- a freshly-opened
+        # library would silently be missing columns/tables on first use.
+        _schema_ready = False
+
+        os.environ["JUKEBOX_DB_PATH"] = db_path
+        if music_dir:
+            os.environ["JUKEBOX_MUSIC_DIR"] = music_dir
+        else:
+            os.environ.pop("JUKEBOX_MUSIC_DIR", None)
+
+        return {"ok": True}
+
+
+@app.route("/api/library/current")
+def library_current():
+    return jsonify(library_manager.get_current() or {"path": None, "name": None, "music_dir": None})
+
+
+@app.route("/api/library/recent")
+def library_recent():
+    return jsonify(library_manager.list_recent())
+
+
+@app.route("/api/library/new", methods=["POST"])
+def library_new():
+    """Chains both native dialogs server-side (save location + name, then
+    the music folder) so the frontend just makes one round-trip -- same
+    "why a plain Flask route is fine here" reasoning as _pick_save_file_dialog
+    itself. Creates the library, switches to it, and kicks off its first
+    scan the same way /api/choose-folder already does."""
+    if _any_background_job_running():
+        return jsonify({"ok": False, "error": "A background job is running — wait for it to finish, then try again."})
+    save_path = _pick_save_file_dialog(
+        "Save your new library as:", f"New Library{library_manager.LIBRARY_EXT}",
+    )
+    if not save_path:
+        return jsonify({"ok": False, "cancelled": True})
+    music_dir = _pick_folder_dialog("Select the music folder for this library")
+    if not music_dir or not os.path.isdir(music_dir):
+        return jsonify({"ok": False, "cancelled": True})
+
+    db_path = library_manager.create_new(save_path, music_dir)
+    result = _switch_library(db_path, music_dir)
+    if not result["ok"]:
+        return jsonify(result)
+    started = _start_scan_bg()
+    return jsonify({
+        "ok": True, "path": db_path, "name": library_manager.display_name(db_path),
+        "music_dir": music_dir, "started": started,
+    })
+
+
+@app.route("/api/library/open", methods=["POST"])
+def library_open():
+    """Body may include a `path` (picking a specific entry from the Recent
+    list); with no path, runs a native file-choose dialog instead."""
+    if _any_background_job_running():
+        return jsonify({"ok": False, "error": "A background job is running — wait for it to finish, then try again."})
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get("path")
+    if not path:
+        if sys.platform == "darwin":
+            result = subprocess.run(
+                ["osascript", "-e",
+                 f'POSIX path of (choose file with prompt "Open a Notorious B.P.M. library" '
+                 f'of type {{"nbpmlib"}})'],
+                capture_output=True, text=True,
+            )
+            path = result.stdout.strip() or None if result.returncode == 0 else None
+        else:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            try:
+                path = filedialog.askopenfilename(
+                    title="Open a Notorious B.P.M. library",
+                    filetypes=[("Notorious B.P.M. Library", f"*{library_manager.LIBRARY_EXT}")],
+                ) or None
+            finally:
+                root.destroy()
+        if not path:
+            return jsonify({"ok": False, "cancelled": True})
+
+    opened = library_manager.open_existing(path)
+    if not opened["ok"]:
+        return jsonify(opened)
+    result = _switch_library(opened["path"], opened["music_dir"])
+    if not result["ok"]:
+        return jsonify(result)
+    return jsonify({
+        "ok": True, "path": opened["path"], "name": library_manager.display_name(opened["path"]),
+        "music_dir": opened["music_dir"],
+    })
 
 
 @app.route("/api/convert/status")
@@ -1590,7 +1806,7 @@ def _run_convert_bg(track_ids, fmt):
 
 
 def _start_convert(track_ids, fmt):
-    with _convert_lock:
+    with _library_lock, _convert_lock:
         if _convert_state["running"]:
             return None
         _convert_state.update(running=True, done=0, total=len(track_ids), results=None, error=None)
@@ -2038,7 +2254,7 @@ def duplicates_auto_clean():
             "skipped_groups": skipped_groups,
         })
 
-    with _dup_clean_lock:
+    with _library_lock, _dup_clean_lock:
         if _dup_clean_state["running"]:
             return jsonify({"started": False, "error": "Already running"})
         _dup_clean_state.update(running=True, done=0, total=len(to_delete), deleted=0, errors=None, error=None)
@@ -2543,7 +2759,7 @@ def _delete_track_rows(db, rows, progress_cb=None):
             if not os.path.isfile(fpath):
                 raise OSError(f"Source file not found: {fpath}")
             os.makedirs(TRASH_DIR, exist_ok=True)
-            shutil.move(fpath, trash_dest)
+            safe_move(fpath, trash_dest)
         except OSError as e:
             # A missing source file used to fall through silently here --
             # the move was just skipped, but the code still went on to
@@ -2672,7 +2888,7 @@ def restore_trash(trash_id):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.isfile(dest):
         return jsonify({"ok": False, "error": "A file already exists at the original location"}), 409
-    shutil.move(row["trash_path"], dest)
+    safe_move(row["trash_path"], dest)
 
     track_id = _reindex_single_file(db, dest, row["original_path"])
     db.execute("DELETE FROM trash WHERE id=?", (trash_id,))

@@ -2322,6 +2322,8 @@ function setIpodStep(key, state, detail) {
 
 function resetIpodSteps() {
   ["detect", "copy", "move", "scan", "art"].forEach((k) => setIpodStep(k, "pending", ""));
+  el("ipod-library-choice").classList.add("hidden");
+  el("ipod-steps").classList.add("hidden");
   el("ipod-move-steps").classList.add("hidden");
   el("ipod-skipped-panel").classList.add("hidden");
   el("ipod-skipped-list").innerHTML = "";
@@ -2681,10 +2683,11 @@ async function enterIpodReview(ipodName) {
 }
 
 async function runIpodImport() {
+  // Reset/open already happened in openIpodImportChoice() (the modal was
+  // already showing the "where should this go" screen); beginIpodDetection()
+  // just revealed the step list this actually drives.
   const btn = el("import-ipod");
   btn.disabled = true;
-  resetIpodSteps();
-  openIpodModal();
 
   // find_ipod() is normally near-instant, but a real Classic's spinning
   // drive over USB occasionally makes a single file check stall for tens
@@ -2759,7 +2762,52 @@ async function runIpodImport() {
     btn.disabled = false;
   }
 }
-el("import-ipod").addEventListener("click", runIpodImport);
+// The iPod's own music frequently overlaps heavily with whatever library
+// is already open (it was very likely synced FROM it, or something close
+// to it, originally) -- see this session's own real-world case, where an
+// iPod import merged into the main library needed a large manual
+// duplicate cleanup afterward. Asking up front, every time, keeps that a
+// deliberate choice instead of a default.
+async function openIpodImportChoice() {
+  resetIpodSteps();
+  openIpodModal();
+  el("ipod-library-choice").classList.remove("hidden");
+  let name = "current library";
+  try {
+    const cur = await api("/library/current");
+    if (cur && cur.name) name = cur.name;
+  } catch (e) { /* leave the generic label */ }
+  el("ipod-current-library-name").textContent = name;
+}
+
+function beginIpodDetection() {
+  el("ipod-library-choice").classList.add("hidden");
+  el("ipod-steps").classList.remove("hidden");
+  runIpodImport();
+}
+
+el("ipod-use-current-library").addEventListener("click", beginIpodDetection);
+
+el("ipod-new-library-for-import").addEventListener("click", async () => {
+  const btn = el("ipod-new-library-for-import");
+  btn.disabled = true;
+  try {
+    const result = await api("/library/new", { method: "POST" });
+    if (!result.ok) {
+      if (!result.cancelled) showToast(result.error || "Couldn't create the library.", { kind: "error" });
+      return;
+    }
+    await loadLibraryName();
+    showToast(`Created "${result.name}".`, { kind: "success" });
+    beginIpodDetection();
+  } catch (e) {
+    showToast("Couldn't create the library.", { kind: "error" });
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el("import-ipod").addEventListener("click", openIpodImportChoice);
 
 // -------------------------------------------------------------- tag checker --
 // Missing genre/album/year are unambiguous straight from the DB (NULL/empty
@@ -3156,6 +3204,140 @@ el("choose-folder").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
     hideScanProgress();
+  }
+});
+
+// ---------------------------------------------------------------- library --
+// Multiple, independent, switchable libraries -- each just one .nbpmlib
+// file the user names and saves wherever they like (an external drive,
+// anywhere); music files stay put, only the catalog lives in the file. All
+// the actual switching logic is server-side (app.py's _switch_library);
+// this is the small topbar dropdown (New/Open/Recent) plus the current
+// name display.
+async function loadLibraryName() {
+  try {
+    const cur = await api("/library/current");
+    el("library-name").textContent = cur.name || "Library";
+  } catch (e) { /* leave the placeholder -- not worth a toast on startup */ }
+}
+
+function closeLibraryMenu() {
+  el("library-menu").classList.add("hidden");
+}
+
+async function loadLibraryRecentList() {
+  const list = el("library-recent-list");
+  list.innerHTML = "";
+  let recents = [];
+  try {
+    recents = await api("/library/recent");
+  } catch (e) {
+    list.innerHTML = `<div class="library-recent-empty">Couldn't load recent libraries.</div>`;
+    return;
+  }
+  if (!recents.length) {
+    list.innerHTML = `<div class="library-recent-empty">No other libraries yet.</div>`;
+    return;
+  }
+  recents.forEach((r) => {
+    const item = document.createElement("button");
+    item.className = "library-recent-item" + (r.exists ? "" : " missing");
+    item.innerHTML = `<span class="name">${escapeHtml(r.name)}</span>` +
+      (r.exists ? "" : `<span class="missing-tag">not found</span>`);
+    item.title = r.path;
+    item.disabled = !r.exists;
+    item.addEventListener("click", () => switchToLibrary(r.path));
+    list.appendChild(item);
+  });
+}
+
+async function switchToLibrary(path) {
+  closeLibraryMenu();
+  showToast("Switching library…", { kind: "info" });
+  try {
+    const result = await api("/library/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!result.ok) {
+      if (!result.cancelled) showToast(result.error || "Couldn't open that library.", { kind: "error" });
+      return;
+    }
+    await afterLibrarySwitch();
+  } catch (e) {
+    showToast("Couldn't open that library.", { kind: "error" });
+  }
+}
+
+async function afterLibrarySwitch() {
+  clearSelection();
+  await loadLibraryName();
+  await loadFacets();
+  await loadTracks(true);
+  await loadPlaylists();
+  await loadSmartPlaylists();
+  await loadCurrentFolder();
+}
+
+el("library-menu-btn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const menu = el("library-menu");
+  const opening = menu.classList.contains("hidden");
+  menu.classList.toggle("hidden");
+  if (opening) await loadLibraryRecentList();
+});
+document.addEventListener("click", (e) => {
+  if (!el("library-control").contains(e.target)) closeLibraryMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeLibraryMenu();
+});
+
+el("library-new").addEventListener("click", async () => {
+  closeLibraryMenu();
+  const btn = el("library-menu-btn");
+  btn.disabled = true;
+  try {
+    const result = await api("/library/new", { method: "POST" });
+    if (!result.ok) {
+      if (!result.cancelled) showToast(result.error || "Couldn't create the library.", { kind: "error" });
+      return;
+    }
+    if (result.started) {
+      showScanProgress(0, 0);
+      const status = await pollProgress("/scan-progress", (s) => {
+        showScanProgress(s.done, s.total);
+        return s.running;
+      });
+      hideScanProgress();
+      if (status.error) showToast(`Scan failed: ${status.error}`, { kind: "error" });
+    }
+    await afterLibrarySwitch();
+    showToast(`Created "${result.name}".`, { kind: "success" });
+  } catch (e) {
+    showToast("Couldn't create the library.", { kind: "error" });
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el("library-open").addEventListener("click", async () => {
+  closeLibraryMenu();
+  const btn = el("library-menu-btn");
+  btn.disabled = true;
+  try {
+    const result = await api("/library/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!result.ok) {
+      if (!result.cancelled) showToast(result.error || "Couldn't open that library.", { kind: "error" });
+      return;
+    }
+    await afterLibrarySwitch();
+    showToast(`Opened "${result.name}".`, { kind: "success" });
+  } catch (e) {
+    showToast("Couldn't open that library.", { kind: "error" });
+  } finally {
+    btn.disabled = false;
   }
 });
 
@@ -4402,4 +4584,5 @@ async function loadCurrentFolder() {
   await loadSmartPlaylists();
   await loadTracks();
   await loadCurrentFolder();
+  await loadLibraryName();
 })();

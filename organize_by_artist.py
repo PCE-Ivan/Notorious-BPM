@@ -22,7 +22,8 @@ import sys
 import mutagen
 
 import config as jukebox_config
-from scan_library import EXTS, first_or_none
+from scan_library import EXTS, _is_real_audio_file, first_or_none
+from fs_safety import safe_move
 
 MUSIC_DIR = jukebox_config.get_music_dir()
 
@@ -69,7 +70,13 @@ def organize(progress_cb=None):
         if root == MUSIC_DIR:
             dirs[:] = [d for d in dirs if d != ".ipod_staging"]
         for fname in files:
-            if os.path.splitext(fname)[1].lower() in EXTS:
+            # _is_real_audio_file excludes AppleDouble sidecar files
+            # ("._Song.mp3") that macOS writes next to every real file on
+            # any non-APFS/HFS+ volume (exFAT/FAT32/NTFS external drives)
+            # to hold what it can't store natively -- these match EXTS just
+            # like the real file but aren't audio at all. scan_library.py's
+            # own walk already filters these the same way.
+            if os.path.splitext(fname)[1].lower() in EXTS and _is_real_audio_file(fname):
                 files_to_check.append(os.path.join(root, fname))
 
     total = len(files_to_check)
@@ -103,7 +110,7 @@ def organize(progress_cb=None):
                 os.makedirs(dest_dir, exist_ok=True)
                 dest_path = _unique_dest_path(dest_path)
                 old_rel = os.path.relpath(fpath, MUSIC_DIR)
-                shutil.move(fpath, dest_path)
+                safe_move(fpath, dest_path)
                 new_rel = os.path.relpath(dest_path, MUSIC_DIR)
                 path_moves[old_rel] = new_rel
                 moved += 1

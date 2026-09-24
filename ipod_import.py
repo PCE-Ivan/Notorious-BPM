@@ -18,6 +18,8 @@ import os
 import shutil
 import struct
 
+from fs_safety import safe_move
+
 AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".alac"}
 
 # mhod content-type codes that matter here; see the module docstring.
@@ -517,7 +519,7 @@ def _refile_staged(staging_root, fpath, artist, title):
         dest_path = organize_by_artist._unique_dest_path(natural_path)
     else:
         dest_path = natural_path
-    shutil.move(fpath, dest_path)
+    safe_move(fpath, dest_path)
     return dest_path
 
 
@@ -665,7 +667,7 @@ def move_staged_to_library(staging_root, music_dir, existing_keys=None, normaliz
         dest_folder, natural_path = _natural_staged_path(music_dir, info["artist"], info["title"], ext)
         os.makedirs(dest_folder, exist_ok=True)
         dest_path = organize_by_artist._unique_dest_path(natural_path) if os.path.exists(natural_path) else natural_path
-        shutil.move(fpath, dest_path)
+        safe_move(fpath, dest_path)
         rel = os.path.relpath(dest_path, music_dir)
         moved_paths.append(rel)
 

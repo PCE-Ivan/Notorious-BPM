@@ -52,6 +52,19 @@
           <div id="search-suggestions" class="search-suggestions hidden"></div>
         </div>
         <div class="topbar-library-status">
+          <div id="library-control" class="library-control">
+            <button id="library-menu-btn" class="btn-secondary topbar-action-btn" title="Switch, create, or open a library">
+              📚 <span id="library-name">Library</span> ▾
+            </button>
+            <div id="library-menu" class="library-menu hidden">
+              <button id="library-new" class="library-menu-item">New Library…</button>
+              <button id="library-open" class="library-menu-item">Open Library…</button>
+              <div class="library-menu-divider"></div>
+              <div class="library-menu-label">Recent</div>
+              <div id="library-recent-list" class="library-recent-list"></div>
+            </div>
+          </div>
+          <div class="topbar-divider"></div>
           <div class="stats-block">
             <div class="stats" id="stats"></div>
             <div class="current-folder" id="current-folder" title=""></div>
@@ -744,7 +757,20 @@
       <button id="ipod-close" class="btn-icon" title="Close">✕</button>
     </div>
     <div class="dup-body">
-      <ul id="ipod-steps" class="ipod-steps">
+      <!-- Shown first, before any detect/copy logic runs -- the iPod's own
+           music frequently overlaps heavily with whatever library is
+           already open (it was very likely synced FROM it originally),
+           so defaulting attention toward a fresh, separate library keeps
+           an import from silently flooding the current one with
+           duplicates, while still allowing it when that's actually wanted. -->
+      <div id="ipod-library-choice" class="ipod-review-panel">
+        <p class="ipod-review-heading">Where should this import go?</p>
+        <div class="ipod-library-choice-actions">
+          <button id="ipod-new-library-for-import" class="btn-primary">Create a new library for this import</button>
+          <button id="ipod-use-current-library" class="btn-secondary">Import into "<span id="ipod-current-library-name">current library</span>"</button>
+        </div>
+      </div>
+      <ul id="ipod-steps" class="ipod-steps hidden">
         <li id="ipod-step-detect" class="ipod-step">
           <span class="ipod-step-icon">○</span>
           <span class="ipod-step-text">
