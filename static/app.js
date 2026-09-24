@@ -3192,6 +3192,101 @@ el("fix-artist-title-btn").addEventListener("click", async () => {
   await loadTracks(true);
 });
 
+const VERIFY_AUDIO_ERROR_MESSAGES = {
+  fpcalc_missing: "Needs “fpcalc” installed (brew install chromaprint) — same requirement as Live Radio's song ID.",
+  no_api_key: "Needs a free AcoustID API key — set one in Live Radio's settings first.",
+};
+
+function renderAudioMismatchRow(m) {
+  const row = document.createElement("div");
+  row.className = "tag-issue-row";
+  row.innerHTML = `
+    <div class="tag-issue-info">
+      ${escapeHtml(m.current_artist || "Unknown artist")} — ${escapeHtml(m.current_title || "")}
+      <br><span style="color:var(--accent)">→ ${escapeHtml(m.found_artist)} — ${escapeHtml(m.found_title)}</span>
+    </div>
+    <button class="btn-small tag-issue-save">Apply</button>
+    <button class="btn-small">Dismiss</button>
+  `;
+  const [applyBtn, dismissBtn] = row.querySelectorAll("button");
+  applyBtn.addEventListener("click", async () => {
+    applyBtn.disabled = true;
+    applyBtn.textContent = "Applying…";
+    try {
+      await api(`/tags/${m.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ field: "artist", value: m.found_artist }) });
+      await api(`/tags/${m.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ field: "title", value: m.found_title }) });
+      row.classList.add("tag-issue-done");
+      applyBtn.textContent = "Applied";
+      dismissBtn.remove();
+      await loadFacets();
+      await loadTracks(true);
+    } catch (e) {
+      applyBtn.disabled = false;
+      applyBtn.textContent = "Apply";
+      showToast("Couldn't apply that fix.", { kind: "error" });
+    }
+  });
+  dismissBtn.addEventListener("click", () => row.remove());
+  return row;
+}
+
+el("verify-audio-bulk-btn").addEventListener("click", async () => {
+  const ids = Array.from(state.selected);
+  const btn = el("verify-audio-bulk-btn");
+  const original = btn.textContent;
+  const resultEl = el("verify-audio-bulk-result");
+  const progressEl = el("verify-audio-bulk-progress");
+  const progressFill = el("verify-audio-bulk-progress-fill");
+  const list = el("verify-audio-mismatches");
+  list.innerHTML = "";
+  resultEl.textContent = "";
+  if (!ids.length) {
+    resultEl.textContent = "Select some tracks in the library list first, then come back here.";
+    return;
+  }
+  btn.disabled = true;
+  const started = await api("/verify-audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ track_ids: ids }),
+  });
+  if (started.error) {
+    btn.disabled = false;
+    if (started.error !== "Already running") showToast(started.error, { kind: "error" });
+    else resultEl.textContent = "Already running…";
+    return;
+  }
+  progressFill.style.width = "0%";
+  progressEl.classList.remove("hidden");
+  let status;
+  try {
+    status = await pollProgress("/verify-audio/progress", (s) => {
+      btn.textContent = s.total ? `Listening… ${s.done}/${s.total}` : "Listening…";
+      progressFill.style.width = s.total ? `${Math.min(100, (s.done / s.total) * 100)}%` : "0%";
+      return s.running;
+    });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = original;
+    progressEl.classList.add("hidden");
+    resultEl.textContent = e.message;
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = original;
+  progressEl.classList.add("hidden");
+  if (status.error) {
+    resultEl.textContent = VERIFY_AUDIO_ERROR_MESSAGES[status.error] || `Failed: ${status.error}`;
+    return;
+  }
+  const stats = status.result || {};
+  const mismatches = stats.mismatches || [];
+  resultEl.textContent = `Checked ${stats.checked || 0} track(s)` +
+    (stats.errors ? `, ${stats.errors} couldn't be identified` : "") +
+    (mismatches.length ? `. ${mismatches.length} possible mismatch(es) below.` : " — no mismatches found.");
+  mismatches.forEach((m) => list.appendChild(renderAudioMismatchRow(m)));
+});
+
 el("tags-close").addEventListener("click", () => el("tags-backdrop").classList.add("hidden"));
 el("tags-backdrop").addEventListener("click", (e) => { if (e.target.id === "tags-backdrop") el("tags-backdrop").classList.add("hidden"); });
 
@@ -4615,9 +4710,20 @@ el("selection-edit-tags").addEventListener("click", () => {
   // and leaving them blank/unchanged for the others would be confusing,
   // so those two fields are hidden once more than one track is selected).
   const single = ids.length === 1 ? state.currentList.find((t) => t.id === ids[0]) : null;
+  // "Fix artist & track names" only confirms the current tags name a
+  // real, existing song -- equally true whether or not this file's audio
+  // actually is that song, so a file mislabeled with a different real
+  // song's tags passes that check. Verifying the audio itself (Chromaprint/
+  // AcoustID, same tools/account as Live Radio's song-ID feature) catches
+  // that instead -- pre-fills Artist/Title with what it finds so accepting
+  // the fix is just clicking OK.
   const artistTitleHtml = single ? `
     <div class="filter-group" style="margin-bottom:10px"><label>Artist</label><input type="text" id="bulk-tag-artist" value="${escapeHtml(single.artist || "")}"></div>
-    <div class="filter-group" style="margin-bottom:10px"><label>Title</label><input type="text" id="bulk-tag-title" value="${escapeHtml(single.title || "")}"></div>
+    <div class="filter-group" style="margin-bottom:6px"><label>Title</label><input type="text" id="bulk-tag-title" value="${escapeHtml(single.title || "")}"></div>
+    <div style="margin-bottom:10px">
+      <button type="button" id="verify-audio-btn" class="btn-small">🎧 Verify against audio</button>
+      <span id="verify-audio-status" class="dup-summary-note"></span>
+    </div>
   ` : "";
   const body = `
     <p style="color:var(--text-dim);font-size:12px;margin:0 0 12px">${ids.length} track(s) selected — blank fields are left unchanged.</p>
@@ -4651,6 +4757,37 @@ el("selection-edit-tags").addEventListener("click", () => {
     await loadTracks(true);
     showToast(`Applied ${applied} tag update(s).`, { kind: "success" });
   });
+  if (single) {
+    el("verify-audio-btn").addEventListener("click", async () => {
+      const btn = el("verify-audio-btn");
+      const status = el("verify-audio-status");
+      btn.disabled = true;
+      status.textContent = "Listening…";
+      try {
+        const result = await api(`/tracks/${single.id}/verify-audio`, { method: "POST" });
+        if (!result.ok) {
+          const messages = {
+            fpcalc_missing: "Needs “fpcalc” installed (brew install chromaprint) — same requirement as Live Radio's song ID.",
+            no_api_key: "Needs a free AcoustID API key — set one in Live Radio's settings first.",
+            no_match: "Couldn't identify this recording.",
+          };
+          status.textContent = messages[result.error] || `Couldn't verify: ${result.error}`;
+          return;
+        }
+        if (result.mismatched) {
+          el("bulk-tag-artist").value = result.found_artist;
+          el("bulk-tag-title").value = result.found_title;
+          status.textContent = `Audio matches "${result.found_artist} — ${result.found_title}" instead — fields updated, click OK to apply.`;
+        } else {
+          status.textContent = "Audio matches the current tags.";
+        }
+      } catch (e) {
+        status.textContent = "Couldn't verify (network error).";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
 });
 
 async function loadCurrentFolder() {

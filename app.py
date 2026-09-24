@@ -272,7 +272,7 @@ def _any_background_job_running():
         _ipod_artfill_state, _organize_state, _fill_genres_state,
         _fill_years_state, _unify_genre_state, _fix_artist_title_state,
         _deep_scan_state, _convert_state, _dup_clean_state,
-        _delete_tracks_state, _fill_art_state,
+        _delete_tracks_state, _fill_art_state, _verify_audio_state,
     ))
 
 
@@ -1123,6 +1123,94 @@ def fix_artist_title_progress():
     return jsonify(_fix_artist_title_state)
 
 
+# Bulk audio-fingerprint verification -- unlike every other bulk tool
+# above, this never writes anything on its own: a fingerprint match is
+# still just one more opinion (a mislabeled file, a cover version, an
+# ambiguous short clip can all produce a plausible-looking "mismatch"),
+# so it only reports candidates for the user to review and apply -- the
+# same review-before-acting shape as the Duplicates panel's own
+# groups_skipped list, and it reuses /api/tags/<id> (already writes both
+# file and index) for the actual fix once someone accepts one.
+_verify_audio_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
+_verify_audio_lock = threading.Lock()
+
+
+def _run_verify_audio_bg(track_ids):
+    def progress_cb(done, total):
+        _verify_audio_state["done"] = done
+        _verify_audio_state["total"] = total
+
+    try:
+        fpcalc_path = _find_binary("fpcalc")
+        if not fpcalc_path:
+            raise RuntimeError("fpcalc_missing")
+        api_key = (jukebox_config.load_config().get("acoustidApiKey") or "").strip()
+        if not api_key:
+            raise RuntimeError("no_api_key")
+
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            if track_ids:
+                placeholders = ",".join("?" * len(track_ids))
+                rows = conn.execute(
+                    f"SELECT id, path, artist, title FROM tracks WHERE id IN ({placeholders})", track_ids,
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT id, path, artist, title FROM tracks").fetchall()
+        finally:
+            conn.close()
+
+        total = len(rows)
+        mismatches = []
+        checked = 0
+        errors = 0
+        for i, row in enumerate(rows):
+            fpath = os.path.join(MUSIC_DIR, row["path"])
+            if os.path.isfile(fpath):
+                try:
+                    found_artist, found_title, score = _fingerprint_lookup(fpath, api_key, fpcalc_path)
+                    checked += 1
+                    if found_title is not None and _tags_look_mismatched(row["artist"], row["title"], found_artist, found_title):
+                        mismatches.append({
+                            "id": row["id"], "score": score,
+                            "current_artist": row["artist"], "current_title": row["title"],
+                            "found_artist": found_artist, "found_title": found_title,
+                        })
+                except Exception:
+                    errors += 1
+            progress_cb(i + 1, total)
+            time.sleep(0.35)  # AcoustID asks for at most ~3 requests/second per API key
+        _verify_audio_state["result"] = {"checked": checked, "errors": errors, "mismatches": mismatches}
+    except Exception as e:
+        _verify_audio_state["error"] = str(e)
+    finally:
+        _verify_audio_state["running"] = False
+
+
+@app.route("/api/verify-audio", methods=["POST"])
+def verify_audio_route():
+    """Pass {"track_ids": [...]} to scope it (the selection toolbar always
+    does -- fingerprinting is real per-track work, both decoding audio and
+    an AcoustID round trip, so this is opt-in on a selection rather than
+    silently defaulting to the whole library); omit it to run across
+    everything, accepting that cost."""
+    data = request.get_json(force=True, silent=True) or {}
+    track_ids = data.get("track_ids") or None
+    with _library_lock, _verify_audio_lock:
+        if _verify_audio_state["running"]:
+            return jsonify({"started": False, "error": "Already running"})
+        _verify_audio_state.update(running=True, done=0, total=0, result=None, error=None)
+        close_db(None)
+        threading.Thread(target=_run_verify_audio_bg, args=(track_ids,), daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/verify-audio/progress")
+def verify_audio_progress():
+    return jsonify(_verify_audio_state)
+
+
 @app.route("/api/tracks/<int:track_id>/lookup-tags", methods=["POST"])
 def lookup_track_tags(track_id):
     """Picard-style single-track refresh: runs the same Deezer-backed
@@ -1161,6 +1249,66 @@ def lookup_track_tags(track_id):
     if not row:
         abort(404)
     return jsonify({"ok": True, "changed": changed, "errors": errors, "track": track_to_dict(row)})
+
+
+def _tags_look_mismatched(current_artist, current_title, found_artist, found_title):
+    """Loose text comparison between a track's current tags and what audio
+    fingerprinting found -- deliberately lenient (artist-credit formatting/
+    ordering varies between MusicBrainz and however a file happens to be
+    tagged, e.g. "Bill Medley & Jennifer Warnes" vs "Bill Medley, Jennifer
+    Warnes"), so this only flags a likely-real mismatch (the fingerprint
+    found a genuinely different song) rather than every stylistic
+    difference. Substring-based, same convention art_lookup.py/fill_genres.py
+    already use for their own same-artist filtering."""
+    def norm(s):
+        return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+    cur_artist, cur_title = norm(current_artist), norm(current_title)
+    found_artist_n, found_title_n = norm(found_artist), norm(found_title)
+    artist_ok = not cur_artist or not found_artist_n or cur_artist in found_artist_n or found_artist_n in cur_artist
+    title_ok = not cur_title or not found_title_n or cur_title in found_title_n or found_title_n in cur_title
+    return not (artist_ok and title_ok)
+
+
+@app.route("/api/tracks/<int:track_id>/verify-audio", methods=["POST"])
+def verify_track_audio(track_id):
+    """Audio fingerprint check (Chromaprint/AcoustID, same tools/account as
+    the Live Radio song-ID feature) for one track: does the file's actual
+    audio content match its current artist/title tags? Catches what the
+    Deezer-backed "Fix artist & track names" tool structurally can't --
+    that tool only confirms the current tags name a real, existing song,
+    which is equally true whether or not this particular audio file is
+    that song. A file mislabeled with a different, genuinely real song's
+    tags passes that check by design; this checks the audio itself
+    instead. Synchronous -- one fingerprint + one lookup for a single
+    track, same cost class as lookup_track_tags above."""
+    fpcalc_path = _find_binary("fpcalc")
+    if not fpcalc_path:
+        return jsonify({"ok": False, "error": "fpcalc_missing"})
+    api_key = (jukebox_config.load_config().get("acoustidApiKey") or "").strip()
+    if not api_key:
+        return jsonify({"ok": False, "error": "no_api_key"})
+
+    db = get_db()
+    row = db.execute("SELECT path, artist, title FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if not row:
+        abort(404)
+    fpath = os.path.join(MUSIC_DIR, row["path"])
+    if not os.path.isfile(fpath):
+        return jsonify({"ok": False, "error": "File not found on disk"})
+
+    try:
+        found_artist, found_title, score = _fingerprint_lookup(fpath, api_key, fpcalc_path)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    if found_title is None:
+        return jsonify({"ok": False, "error": "no_match"})
+
+    mismatched = _tags_look_mismatched(row["artist"], row["title"], found_artist, found_title)
+    return jsonify({
+        "ok": True, "mismatched": mismatched, "score": score,
+        "current_artist": row["artist"], "current_title": row["title"],
+        "found_artist": found_artist, "found_title": found_title,
+    })
 
 
 TAG_AUDIT_CHECKS = {
@@ -3748,14 +3896,62 @@ def set_acoustid_key():
     return jsonify({"ok": True})
 
 
+def _fingerprint_lookup(fpath, api_key, fpcalc_path, timeout=30):
+    """Runs Chromaprint (fpcalc) against a local audio file and looks the
+    fingerprint up on AcoustID -- the free, open, MusicBrainz-backed
+    fingerprint database tools like Picard use. Shared by radio_identify
+    (fingerprints a live-captured clip) and the library audio-verification
+    feature below (fingerprints a file already on disk) -- the "read
+    fpcalc's json, call AcoustID, pick the best-scoring match" logic is
+    identical either way; only how the audio bytes get there differs.
+    Returns (artist, title, score) for the highest-confidence match with
+    both a title and at least one credited artist, or (None, None, None)
+    if fpcalc or the lookup itself found nothing usable. Raises on a
+    genuine I/O/network error -- callers decide how to report that."""
+    result = subprocess.run([fpcalc_path, "-json", fpath], capture_output=True, text=True, timeout=timeout)
+    if result.returncode != 0 or not result.stdout:
+        return None, None, None
+    fp_data = json.loads(result.stdout)
+
+    params = {
+        "client": api_key,
+        "fingerprint": fp_data["fingerprint"],
+        "duration": int(fp_data["duration"]),
+        "meta": "recordings",
+    }
+    lookup_url = "https://api.acoustid.org/v2/lookup?" + urllib.parse.urlencode(params)
+    lookup_req = urllib.request.Request(lookup_url, headers={"User-Agent": RADIO_UA})
+    with urllib.request.urlopen(lookup_req, timeout=15) as resp:
+        lookup = json.loads(resp.read().decode("utf-8"))
+
+    if lookup.get("status") != "ok":
+        msg = (lookup.get("error") or {}).get("message", "Lookup failed")
+        raise RuntimeError(msg)
+
+    # A single clip/file can match several near-identical AcoustID entries
+    # (different pressings/remasters of the same recording) -- keep
+    # whichever has the highest confidence score.
+    best = None
+    for r in lookup.get("results", []):
+        for rec in r.get("recordings", []):
+            if rec.get("title") and rec.get("artists"):
+                score = r.get("score", 0)
+                if not best or score > best[0]:
+                    best = (score, rec)
+    if not best:
+        return None, None, None
+    score, rec = best
+    artist = ", ".join(a["name"] for a in rec.get("artists", []) if a.get("name"))
+    return artist, rec["title"], score
+
+
 @app.route("/api/radio/identify", methods=["POST"])
 def radio_identify():
     """Shazam-style "what's this song" for a station whose ICY metadata is
     missing, empty, or just repeats the station's own name/slogan.
-    Fingerprints ~15s of live audio with Chromaprint (fpcalc) and looks it
-    up against AcoustID -- the same free, open, MusicBrainz-backed
-    fingerprint database tools like Picard use. No per-query cost, nothing
-    stored; the captured clip is a temp file deleted right after."""
+    Fingerprints ~15s of live audio and looks it up via _fingerprint_lookup.
+    No per-query cost, nothing stored; the captured clip is a temp file
+    deleted right after."""
     # These "soft" failures all return HTTP 200 -- the frontend needs to
     # tell them apart (missing key vs missing binary vs no match) to show
     # the right message/prompt, and api()'s fetch wrapper throws away the
@@ -3795,44 +3991,13 @@ def radio_identify():
                     tmp.write(chunk)
                     total += len(chunk)
 
-        result = subprocess.run(
-            [fpcalc_path, "-json", tmp_path], capture_output=True, text=True, timeout=20,
-        )
-        if result.returncode != 0 or not result.stdout:
-            return jsonify({"ok": False, "error": "Couldn't read enough audio from the stream to identify it."})
-        fp_data = json.loads(result.stdout)
-
-        params = {
-            "client": api_key,
-            "fingerprint": fp_data["fingerprint"],
-            "duration": int(fp_data["duration"]),
-            "meta": "recordings",
-        }
-        lookup_url = "https://api.acoustid.org/v2/lookup?" + urllib.parse.urlencode(params)
-        lookup_req = urllib.request.Request(lookup_url, headers={"User-Agent": RADIO_UA})
-        with urllib.request.urlopen(lookup_req, timeout=10) as resp:
-            lookup = json.loads(resp.read().decode("utf-8"))
-
-        if lookup.get("status") != "ok":
-            msg = (lookup.get("error") or {}).get("message", "Lookup failed")
-            return jsonify({"ok": False, "error": msg})
-
-        # A single clip can match several near-identical AcoustID entries
-        # (different pressings/remasters of the same recording) -- keep
-        # whichever has the highest confidence score.
-        best = None
-        for r in lookup.get("results", []):
-            for rec in r.get("recordings", []):
-                if rec.get("title") and rec.get("artists"):
-                    score = r.get("score", 0)
-                    if not best or score > best[0]:
-                        best = (score, rec)
-        if not best:
+        try:
+            artist, title, score = _fingerprint_lookup(tmp_path, api_key, fpcalc_path, timeout=20)
+        except RuntimeError as e:
+            return jsonify({"ok": False, "error": str(e)})
+        if title is None:
             return jsonify({"ok": False, "error": "no_match"})
-
-        score, rec = best
-        artist = ", ".join(a["name"] for a in rec.get("artists", []) if a.get("name"))
-        return jsonify({"ok": True, "artist": artist, "title": rec["title"], "score": score})
+        return jsonify({"ok": True, "artist": artist, "title": title, "score": score})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     finally:

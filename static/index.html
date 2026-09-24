@@ -747,6 +747,26 @@
       </div>
       <button id="fix-artist-title-btn" class="btn-secondary">Fix artist &amp; track names</button>
       <div id="fix-artist-title-result" class="dup-summary-note"></div>
+
+      <div class="tags-deep-divider"></div>
+      <div class="tags-deep-header">
+        <strong>Verify tags against audio</strong>
+        <p class="tags-deep-note">
+          "Fix artist &amp; track names" above only confirms the current tags name a real,
+          existing song — equally true whether or not a given file's actual audio is that
+          song, so a file mislabeled with a different real song's tags passes that check.
+          This instead fingerprints the audio itself (Chromaprint/AcoustID — the same tools
+          and account as Live Radio's song-ID feature, so it needs that same free AcoustID
+          API key and <code>fpcalc</code> installed) and reports anything that doesn't match,
+          for you to review — it never changes a tag on its own. Real per-track work (decode
+          + a lookup each), so this runs against your current selection rather than the whole
+          library — select some tracks first, then come back here.
+        </p>
+      </div>
+      <button id="verify-audio-bulk-btn" class="btn-secondary">Verify selected tracks</button>
+      <div id="verify-audio-bulk-progress" class="dup-progress hidden"><div id="verify-audio-bulk-progress-fill" class="dup-progress-fill"></div></div>
+      <div id="verify-audio-bulk-result" class="dup-summary-note"></div>
+      <div id="verify-audio-mismatches" class="tag-issue-list"></div>
     </div>
   </div>
 </div>
