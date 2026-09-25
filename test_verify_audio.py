@@ -95,6 +95,45 @@ class FingerprintLookupTest(unittest.TestCase):
         self.assertEqual((artist, title), ("Falco", "Rock Me Amadeus"))
         self.assertAlmostEqual(score, 0.95)
 
+    def test_majority_vote_among_recordings_tied_at_top_score(self):
+        # The actual bug this exists for: a real A Flock of Seagulls file,
+        # unambiguously "Wishing (...)", whose single 0.987-score AcoustID
+        # result had 6 linked recordings -- 5 agreeing on "Wishing" (two
+        # minor title-string variants of it) and 1 mislabeled "Man Made".
+        # The old code just took whichever recording AcoustID happened to
+        # list first (here, the wrong one); this must pick the majority.
+        fake_fpcalc_result = mock.Mock(returncode=0, stdout=json.dumps({"fingerprint": "AQAB...", "duration": 330}))
+        seagulls = {"name": "A Flock of Seagulls"}
+        fake_lookup_response = json.dumps({
+            "status": "ok",
+            "results": [{
+                "score": 0.9872429,
+                "recordings": [
+                    {"title": "Man Made", "artists": [seagulls]},
+                    {"title": "Wishing (If I Had a Photograph of You)", "artists": [seagulls]},
+                    {"title": "Wishing (I Had a Photograph of You)", "artists": [seagulls]},
+                    {"title": "Wishing (If I Had a Photograph of You) (orchestral version)", "artists": [seagulls]},
+                    {"title": "Wishing (If I Had a Photograph of You)", "artists": [seagulls]},
+                    {"title": "Wishing (If I Had a Photograph of You)", "artists": [seagulls]},
+                ],
+            }],
+        }).encode("utf-8")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return fake_lookup_response
+
+        with mock.patch("subprocess.run", return_value=fake_fpcalc_result), \
+             mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+            artist, title, score = app._fingerprint_lookup("/fake/path.m4a", "fake-key", "/fake/fpcalc")
+        self.assertEqual((artist, title), ("A Flock of Seagulls", "Wishing (If I Had a Photograph of You)"))
+
     def test_fpcalc_failure_returns_none(self):
         with mock.patch("subprocess.run", return_value=mock.Mock(returncode=1, stdout="")):
             artist, title, score = app._fingerprint_lookup("/fake/path.m4a", "fake-key", "/fake/fpcalc")

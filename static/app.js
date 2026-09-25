@@ -361,7 +361,11 @@ function showTrackContextMenu(event, track, row) {
   el("ctx-convert").onclick = () => { el("selection-convert").click(); hideTrackContextMenu(); };
   el("ctx-fetch-art").onclick = () => {
     hideTrackContextMenu();
-    fetchArtForTrack(track.id).catch(() => showToast("Couldn't find cover art for this track.", { kind: "error" }));
+    if (selectedIds.length > 1) {
+      fetchArtForSelection(selectedIds);
+    } else {
+      fetchArtForTrack(track.id).catch(() => showToast("Couldn't find cover art for this track.", { kind: "error" }));
+    }
   };
   el("ctx-reveal").onclick = () => {
     hideTrackContextMenu();
@@ -2182,6 +2186,10 @@ el("modal-backdrop").addEventListener("click", (e) => { if (e.target.id === "mod
 // themed via the active theme's own tokens instead of the OS's plain
 // dialog box. role="status" + the container's aria-live (see index.html)
 // means a screen reader announces it without needing focus moved to it.
+// duration: 0 skips the auto-dismiss timer -- for a toast a caller means to
+// keep updating live (see fetchArtForSelection below) and remove itself
+// once the work it's reporting on actually finishes, rather than vanishing
+// on a fixed clock unrelated to that.
 function showToast(message, { kind = "info", duration = 4000 } = {}) {
   const container = el("toast-container");
   const toast = document.createElement("div");
@@ -2191,14 +2199,17 @@ function showToast(message, { kind = "info", duration = 4000 } = {}) {
   container.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add("show"));
   let removed = false;
+  let timer = null;
   const remove = () => {
     if (removed) return;
     removed = true;
+    if (timer) clearTimeout(timer);
     toast.classList.remove("show");
     setTimeout(() => toast.remove(), 200);
   };
   toast.addEventListener("click", remove);
-  setTimeout(remove, duration);
+  if (duration > 0) timer = setTimeout(remove, duration);
+  return { update: (text) => { toast.textContent = text; }, remove };
 }
 
 // --------------------------------------------------------------- confirm --
@@ -4262,6 +4273,46 @@ async function fetchArtForTrack(trackId) {
     el("np-art").src = freshUrl;
     el("np-art").classList.remove("hidden");
   }
+}
+
+// Bulk equivalent for the right-click menu's "Fetch cover art" over a
+// multi-selection -- reuses the same /api/fill-art job the Tag Checker's
+// "Find missing cover art" button drives (has_art=0 tracks in the selection
+// only, so re-selecting a large chunk of the library doesn't re-hit art
+// that's already there). No dedicated progress bar for a context-menu
+// action with nowhere obvious to put one, so a single toast is updated in
+// place for the life of the job instead of the usual fire-and-forget one.
+async function fetchArtForSelection(trackIds) {
+  const started = await api("/fill-art", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ track_ids: trackIds }),
+  });
+  if (started.error) {
+    showToast(started.error === "Already running" ? "A cover art lookup is already running." : started.error, { kind: "error" });
+    return;
+  }
+  const toast = showToast(`Looking up cover art… 0/${trackIds.length}`, { duration: 0 });
+  let status;
+  try {
+    status = await pollProgress("/fill-art/progress", (s) => {
+      toast.update(s.total ? `Looking up cover art… ${s.done}/${s.total} (${s.fixed} found)` : "Looking up cover art…");
+      return s.running;
+    });
+  } catch (e) {
+    toast.remove();
+    showToast(e.message, { kind: "error" });
+    return;
+  }
+  toast.remove();
+  if (status.error) {
+    showToast(`Cover art lookup failed: ${status.error}`, { kind: "error" });
+    return;
+  }
+  const stats = status.result || {};
+  showToast(`Found cover art for ${stats.fixed || 0}/${stats.checked || 0} track(s).`, { kind: "success" });
+  await loadFacets();
+  await loadTracks(true);
 }
 
 el("art-fetch-btn").addEventListener("click", async () => {

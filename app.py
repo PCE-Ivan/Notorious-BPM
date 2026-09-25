@@ -3979,21 +3979,42 @@ def _fingerprint_lookup(fpath, api_key, fpcalc_path, timeout=30):
         msg = (lookup.get("error") or {}).get("message", "Lookup failed")
         raise RuntimeError(msg)
 
-    # A single clip/file can match several near-identical AcoustID entries
-    # (different pressings/remasters of the same recording) -- keep
-    # whichever has the highest confidence score.
-    best = None
-    for r in lookup.get("results", []):
-        for rec in r.get("recordings", []):
-            if rec.get("title") and rec.get("artists"):
-                score = r.get("score", 0)
-                if not best or score > best[0]:
-                    best = (score, rec)
-    if not best:
+    results = lookup.get("results", [])
+    if not results:
         return None, None, None
-    score, rec = best
-    artist = ", ".join(a["name"] for a in rec.get("artists", []) if a.get("name"))
-    return artist, rec["title"], score
+    best_score = max(r.get("score", 0) for r in results)
+
+    # One AcoustID "result" (one fingerprint match, one score) is routinely
+    # linked to several different MusicBrainz recordings -- other users'
+    # separate submissions of the same actual song, not a confidence
+    # ranking of its own. Taking whichever recording happened to be listed
+    # first isn't picking the best match, it's picking an arbitrary
+    # submission order: this returned "Man Made" for a real A Flock of
+    # Seagulls file that is unambiguously "Wishing (...)" -- 5 of the 6
+    # recordings tied to that one 0.987-confidence result agreed it was
+    # "Wishing", only 1 said "Man Made", and the old first-wins logic
+    # happened to hit that lone wrong one first. Majority vote instead,
+    # among only the recordings tied to the top score.
+    def norm(s):
+        return re.sub(r"[^\w]", "", (s or "").lower())
+
+    votes = {}  # (norm(artist), norm(title)) -> [count, artist, title]
+    for r in results:
+        if r.get("score", 0) != best_score:
+            continue
+        for rec in r.get("recordings", []):
+            title, artists = rec.get("title"), rec.get("artists")
+            if not title or not artists:
+                continue
+            artist = ", ".join(a["name"] for a in artists if a.get("name"))
+            key = (norm(artist), norm(title))
+            entry = votes.setdefault(key, [0, artist, title])
+            entry[0] += 1
+
+    if not votes:
+        return None, None, None
+    _count, artist, title = max(votes.values(), key=lambda v: v[0])
+    return artist, title, best_score
 
 
 @app.route("/api/radio/identify", methods=["POST"])
