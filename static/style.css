@@ -941,6 +941,66 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* ================================================================= LAYOUT MODES ==
+   Independent of the player theme above (body[data-theme]) -- these only
+   rearrange the toolbar/sidebar/track-list chrome, never the now-playing
+   stage. "classic" (the default, no data-layout attribute set) needs no
+   rules here at all; everything below only fires for the other three. */
+
+/* ---- command-bar: fold every tool tile behind one palette, filters
+   collapse behind a toggle instead of sitting open in the sidebar ---- */
+.command-bar-controls { display: none; gap: 8px; flex-shrink: 0; }
+body[data-layout="command-bar"] .command-bar-controls { display: flex; }
+body[data-layout="command-bar"] .tile-bar { display: none; }
+body[data-layout="command-bar"] #sidebar-filters-wrap { display: none; }
+body[data-layout="command-bar"].filters-open #sidebar-filters-wrap { display: block; }
+
+.command-palette {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 8px;
+  max-height: 360px; overflow-y: auto;
+}
+.command-palette-hint { font-size: 11px; color: var(--text-dim); padding: 2px 6px 8px; }
+.command-palette-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 8px 8px; border-radius: var(--radius); font-size: 13px; color: var(--text); cursor: pointer;
+}
+.command-palette-item:hover, .command-palette-item:focus-visible { background: var(--bg-hover); }
+.command-palette-item .cmd-group { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+
+/* ---- grouped-ribbon: sidebar filter sections collapse to just a label --
+   the toggle buttons are added by JS to every mode's DOM but only do
+   anything (and only show) once this layout is active. ---- */
+.fgroup-toggle { display: none; }
+body[data-layout="grouped-ribbon"] .fgroup-toggle {
+  display: inline; background: none; border: none; color: var(--text-dim);
+  cursor: pointer; font-size: 11px; margin-left: 6px; padding: 0;
+}
+body[data-layout="grouped-ribbon"] .filter-group.collapsed select,
+body[data-layout="grouped-ribbon"] .filter-group.collapsed input:not([type="checkbox"]),
+body[data-layout="grouped-ribbon"] .filter-group.collapsed datalist,
+body[data-layout="grouped-ribbon"] .filter-group.collapsed .filter-hint { display: none; }
+
+/* ---- row-density: icon-only toolbar tiles, tighter rows, per-row actions
+   only on hover -- built for scrolling a library in the thousands. ---- */
+body[data-layout="row-density"] .tile { width: 40px; height: 36px; }
+body[data-layout="row-density"] .tile-label { display: none; }
+body[data-layout="row-density"] .tile-icon { font-size: 15px; }
+body[data-layout="row-density"] .tile-bar { padding-bottom: 6px; }
+body[data-layout="row-density"] .track-row {
+  grid-template-columns: 18px 24px 22px 2fr 1fr 80px 60px 50px 26px 32px 26px;
+  padding: 3px 10px; gap: 8px;
+}
+body[data-layout="row-density"] .track-row .col-art { width: 22px; height: 22px; }
+body[data-layout="row-density"] .track-row .col-queue,
+body[data-layout="row-density"] .track-row .col-add,
+body[data-layout="row-density"] .track-row .col-lookup { opacity: 0; transition: opacity .1s ease; }
+body[data-layout="row-density"] .track-row:hover .col-queue,
+body[data-layout="row-density"] .track-row:hover .col-add,
+body[data-layout="row-density"] .track-row:hover .col-lookup { opacity: 1; }
+
 /* ----------------------------------------- 0. DEFAULT (Platinum Utility) -- */
 /* Late-90s Mac OS Platinum: flat light-gray chrome, simple beveled buttons
    (bright top-left / dark bottom-right edge, no gloss), hairline borders,

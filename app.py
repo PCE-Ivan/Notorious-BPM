@@ -1564,6 +1564,26 @@ VALID_THEMES = {"default", "graphite", "hifi", "cassette", "vinyl"}
 VALID_WOOD_FINISHES = {"walnut", "ebony", "mahogany"}
 VALID_CASSETTE_DESIGNS = {"blue", "red", "rust"}
 VALID_VU_COLORS = {"amber", "blue", "green"}
+# Toolbar/sidebar/track-list arrangement -- independent of the player theme
+# above (which only ever restyles the now-playing stage). "classic" is
+# today's fixed layout; the other three are opt-in decluttering options a
+# user picks from the same place as the player theme.
+VALID_LAYOUTS = {"classic", "command-bar", "grouped-ribbon", "row-density"}
+
+
+@app.route("/api/layout-mode")
+def get_layout_mode():
+    return jsonify({"layoutMode": jukebox_config.load_config().get("layoutMode")})
+
+
+@app.route("/api/layout-mode", methods=["POST"])
+def set_layout_mode():
+    data = request.get_json(force=True, silent=True) or {}
+    layout_mode = data.get("layoutMode")
+    if layout_mode not in VALID_LAYOUTS:
+        abort(400)
+    jukebox_config.update_config(lambda cfg: cfg.__setitem__("layoutMode", layout_mode))
+    return jsonify({"ok": True})
 
 
 @app.route("/api/theme", methods=["POST"])

@@ -752,13 +752,20 @@ function countActiveFilters() {
 // as soon as "/" is typed so the commands are discoverable rather than
 // something you have to already know.
 const SEARCH_COMMANDS = [
-  { cmd: "rescan", label: "Rescan library", btn: "rescan-library" },
-  { cmd: "tag", label: "Tag checker", btn: "open-tag-checker" },
-  { cmd: "folder", label: "Choose folder", btn: "choose-folder" },
-  { cmd: "duplicates", label: "Find duplicates", btn: "find-duplicates" },
-  { cmd: "playlist", label: "Add to playlist", btn: "playlist-menu" },
-  { cmd: "convert", label: "Convert format", btn: "convert-menu" },
-  { cmd: "select", label: "Select all filtered", btn: "select-all-filtered" },
+  { cmd: "rescan", label: "Rescan library", btn: "rescan-library", group: "Library" },
+  { cmd: "tag", label: "Tag checker", btn: "open-tag-checker", group: "Library" },
+  { cmd: "folder", label: "Choose folder", btn: "choose-folder", group: "Library" },
+  { cmd: "duplicates", label: "Find duplicates", btn: "find-duplicates", group: "Library" },
+  { cmd: "organize", label: "Organize by artist", btn: "organize-by-artist", group: "Library" },
+  { cmd: "playlist", label: "Add to playlist", btn: "playlist-menu", group: "Library" },
+  { cmd: "convert", label: "Convert format", btn: "convert-menu", group: "Library" },
+  { cmd: "select", label: "Select all filtered", btn: "select-all-filtered", group: "Library" },
+  { cmd: "ipod", label: "Import from iPod", btn: "import-ipod", group: "Import" },
+  { cmd: "radio", label: "Similar-tracks radio", btn: "radio-mode", group: "Listen" },
+  { cmd: "liveradio", label: "Live radio stations", btn: "open-internet-radio", group: "Listen" },
+  { cmd: "trash", label: "Trash", btn: "open-trash", group: "System" },
+  { cmd: "backup", label: "Backup library", btn: "open-export", group: "System" },
+  { cmd: "stats", label: "Library stats", btn: "open-stats", group: "System" },
 ];
 
 function runSearchCommand(command) {
@@ -800,6 +807,82 @@ el("search").addEventListener("keydown", (e) => {
   }
 });
 el("search").addEventListener("blur", () => setTimeout(hideSearchSuggestions, 150));
+
+// Command Bar layout only: a visual, clickable version of the same
+// SEARCH_COMMANDS list above, for people who'd rather browse than remember
+// a command name to type after "/".
+function renderCommandPalette() {
+  el("command-palette-list").innerHTML = SEARCH_COMMANDS.map((c) =>
+    `<button class="command-palette-item" data-cmd="${c.cmd}"><span>${escapeHtml(c.label)}</span><span class="cmd-group">${escapeHtml(c.group)}</span></button>`
+  ).join("");
+  el("command-palette-list").querySelectorAll(".command-palette-item").forEach((row) => {
+    row.addEventListener("click", () => {
+      const match = SEARCH_COMMANDS.find((c) => c.cmd === row.dataset.cmd);
+      closeCommandPalette();
+      if (match) runSearchCommand(match);
+    });
+  });
+}
+function closeCommandPalette() { el("command-palette").classList.add("hidden"); }
+el("open-command-palette").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const palette = el("command-palette");
+  const opening = palette.classList.contains("hidden");
+  if (opening) renderCommandPalette();
+  palette.classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#command-palette") && e.target.id !== "open-command-palette") closeCommandPalette();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeCommandPalette();
+});
+el("toggle-sidebar-filters").addEventListener("click", () => {
+  document.body.classList.toggle("filters-open");
+});
+
+// ----------------------------------------------------------- layout modes --
+// Toolbar/sidebar/track-list arrangement -- independent of the player theme
+// below (which only ever restyles the now-playing stage). See style.css's
+// own "LAYOUT MODES" section for what each one actually changes.
+const COLLAPSIBLE_FILTER_GROUPS = ["filter-decade", "filter-language", "filter-artist", "filter-rating"];
+state.layoutMode = localStorage.getItem("jukebox-layout-mode") || "classic";
+
+function applyLayoutMode(name) {
+  state.layoutMode = name;
+  try { localStorage.setItem("jukebox-layout-mode", name); } catch (e) { /* private browsing etc -- fine to skip */ }
+  api("/layout-mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layoutMode: name }) }).catch(() => {});
+  document.body.dataset.layout = name;
+  document.body.classList.remove("filters-open");
+  el("layout-select").value = name;
+  if (name === "grouped-ribbon") setUpGroupedRibbonAccordion();
+}
+
+// Adds a collapse toggle to each of the less-frequently-used filter groups
+// (Genre and Sort stay open -- everything else starts collapsed) the first
+// time this layout is picked; harmless to call again on a later switch back
+// into it, since it skips groups that already have their toggle.
+function setUpGroupedRibbonAccordion() {
+  COLLAPSIBLE_FILTER_GROUPS.forEach((inputId) => {
+    const group = el(inputId).closest(".filter-group");
+    if (!group || group.querySelector(".fgroup-toggle")) return;
+    const label = group.querySelector("label");
+    const toggle = document.createElement("button");
+    toggle.className = "fgroup-toggle";
+    toggle.type = "button";
+    toggle.textContent = "▸";
+    toggle.addEventListener("click", (e) => {
+      e.preventDefault();
+      group.classList.toggle("collapsed");
+      toggle.textContent = group.classList.contains("collapsed") ? "▸" : "▾";
+    });
+    if (label) label.appendChild(toggle);
+    group.classList.add("collapsed");
+    toggle.textContent = "▸";
+  });
+}
+
+el("layout-select").addEventListener("change", (e) => applyLayoutMode(e.target.value));
 
 // ---------------------------------------------------------- player themes --
 const THEME_PANELS = { hifi: "stage-hifi", cassette: "stage-cassette", vinyl: "stage-vinyl" };
@@ -4964,6 +5047,11 @@ async function loadCurrentFolder() {
     const savedVuColor = await api("/vu-color");
     if (savedVuColor && savedVuColor.vuColor) state.vuColor = savedVuColor.vuColor;
   } catch (e) { /* offline/first run -- localStorage-derived default stands */ }
+  try {
+    const savedLayout = await api("/layout-mode");
+    if (savedLayout && savedLayout.layoutMode) state.layoutMode = savedLayout.layoutMode;
+  } catch (e) { /* offline/first run -- localStorage-derived default stands */ }
+  applyLayoutMode(state.layoutMode);
   applyTheme(state.theme);
   applyWoodFinish(state.woodFinish);
   applyCassetteDesign(state.cassetteDesign);

@@ -42,6 +42,20 @@ class SmokeTest(unittest.TestCase):
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
 
+    def test_layout_mode_persists_and_rejects_invalid(self):
+        resp = self.client.post("/api/layout-mode", json={"layoutMode": "row-density"})
+        self.assertEqual(resp.status_code, 200)
+        resp = self.client.get("/api/layout-mode")
+        self.assertEqual(resp.get_json()["layoutMode"], "row-density")
+
+        resp = self.client.post("/api/layout-mode", json={"layoutMode": "not-a-real-layout"})
+        self.assertEqual(resp.status_code, 400)
+        # Rejected value must not have overwritten the last valid one.
+        resp = self.client.get("/api/layout-mode")
+        self.assertEqual(resp.get_json()["layoutMode"], "row-density")
+
+        self.client.post("/api/layout-mode", json={"layoutMode": "classic"})
+
     def test_facets_on_empty_library(self):
         resp = self.client.get("/api/facets")
         self.assertEqual(resp.status_code, 200)

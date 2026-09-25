@@ -50,6 +50,14 @@
         <div class="search-wrap">
           <input id="search" class="search" type="search" placeholder="Search artist, title, album… (or /command)" autocomplete="off">
           <div id="search-suggestions" class="search-suggestions hidden"></div>
+          <div id="command-palette" class="command-palette hidden">
+            <div class="command-palette-hint">Click a command, or type / and it in the search box above</div>
+            <div id="command-palette-list" class="command-palette-list"></div>
+          </div>
+        </div>
+        <div id="command-bar-controls" class="command-bar-controls">
+          <button id="open-command-palette" class="btn-secondary topbar-action-btn" title="Browse every library tool in one list">⌘ Tools</button>
+          <button id="toggle-sidebar-filters" class="btn-secondary topbar-action-btn" title="Show or hide the filter panel">▾ Filters</button>
         </div>
         <div class="topbar-library-status">
           <div id="library-control" class="library-control">
@@ -79,6 +87,18 @@
           <div class="topbar-divider"></div>
           <button id="convert-menu" class="btn-secondary topbar-action-btn tile-risky" title="Convert selected tracks or a whole playlist to another format — writes new files">⇄ Convert</button>
         </div>
+      </div>
+
+      <div class="topbar-divider"></div>
+
+      <div class="topbar-group topbar-appearance" title="Toolbar, filters &amp; track list arrangement">
+        <label class="topbar-group-label" for="layout-select">Layout</label>
+        <select id="layout-select" class="theme-select">
+          <option value="classic">Classic</option>
+          <option value="command-bar">Command Bar</option>
+          <option value="grouped-ribbon">Grouped Ribbon</option>
+          <option value="row-density">Row-First Density</option>
+        </select>
       </div>
 
       <div class="topbar-divider"></div>
