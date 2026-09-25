@@ -24,6 +24,7 @@ import os
 import sqlite3
 
 import config as jukebox_config
+from fs_safety import safe_move
 
 LIBRARY_EXT = ".nbpmlib"
 MAX_RECENT = 10
@@ -82,6 +83,69 @@ def companion_dir(db_path):
             return entry["companion_dir_override"]
     base, _ext = os.path.splitext(db_path)
     return base + ".nbpmdata"
+
+
+def migrate_stray_companion_dir(db_path):
+    """One-time repair for a real bug: app.py used to compute a library's
+    ART_CACHE_DIR/TRASH_DIR/BACKUP_DIR globals at startup as plain
+    os.path.dirname(db_path)/{art_cache,trash,backups}, ignoring this
+    module's own companion_dir() entirely -- unlike _switch_library()
+    (app.py), which always used companion_dir() correctly. Only matters
+    for a non-legacy library: the legacy library's companion_dir IS that
+    same bare app-data folder, by its recorded override, so old and new
+    locations coincide there and this is a no-op. For any other library
+    (anything created after multi-library support existed), that bug
+    meant its cache/trash/backups landed in a bare folder dropped next to
+    the library file instead of its own isolated <name>.nbpmdata/ folder
+    -- so a second library saved in the same directory would collide
+    with it (art_cache files are named by track id, and ids are
+    autoincrement per-DB, so two libraries WILL reuse the same ids).
+    Moves each subfolder's contents into the correct location, file by
+    file, never overwriting anything already there -- safe to call on
+    every startup, and a no-op once nothing's left to move. Trash entries
+    also get their DB-recorded trash_path repointed at the new location
+    (the only one of the three that's tracked anywhere besides the
+    filesystem itself -- art_cache/backups are found by listing the
+    directory, but restoring/purging a trashed file looks it up by the
+    absolute path recorded in the library's own `trash` table at the
+    moment it was trashed)."""
+    correct = companion_dir(db_path)
+    stray = os.path.dirname(db_path)
+    if os.path.normpath(correct) == os.path.normpath(stray):
+        return
+    moved_trash = []
+    for name in ("trash", "art_cache", "backups"):
+        stray_sub = os.path.join(stray, name)
+        if not os.path.isdir(stray_sub):
+            continue
+        correct_sub = os.path.join(correct, name)
+        os.makedirs(correct_sub, exist_ok=True)
+        for fname in os.listdir(stray_sub):
+            src = os.path.join(stray_sub, fname)
+            dst = os.path.join(correct_sub, fname)
+            if os.path.exists(dst):
+                continue  # already there -- leave the stray copy alone
+            try:
+                safe_move(src, dst)
+            except OSError:
+                continue  # left in place; picked up again on the next launch
+            if name == "trash":
+                moved_trash.append((src, dst))
+        try:
+            os.rmdir(stray_sub)  # only succeeds once truly empty
+        except OSError:
+            pass
+
+    if moved_trash and os.path.isfile(db_path):
+        conn = sqlite3.connect(db_path)
+        try:
+            for old_path, new_path in moved_trash:
+                conn.execute("UPDATE trash SET trash_path=? WHERE trash_path=?", (new_path, old_path))
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # no trash table yet (a library that's never been scanned)
+        finally:
+            conn.close()
 
 
 def _add_recent(path, companion_dir_override=None):

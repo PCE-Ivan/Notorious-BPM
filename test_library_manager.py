@@ -83,6 +83,122 @@ class LibraryManagerTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("error", result)
 
+    def test_migrate_stray_companion_dir_moves_files_into_place(self):
+        # Reproduces the real bug: a non-legacy library whose art_cache/
+        # trash/backups were (before the fix) written straight into
+        # os.path.dirname(db_path) instead of this library's own
+        # companion_dir().
+        db_path = os.path.join(self.tmpdir, "Stray.nbpmlib")
+        open(db_path, "wb").close()
+        stray_root = os.path.dirname(db_path)
+        for sub, fname, content in (
+            ("art_cache", "9.jpg", b"art-bytes"),
+            ("trash", "5_Some Song.mp3", b"audio-bytes"),
+            ("backups", "library-20260101-000000.db", b"db-bytes"),
+        ):
+            os.makedirs(os.path.join(stray_root, sub), exist_ok=True)
+            with open(os.path.join(stray_root, sub, fname), "wb") as f:
+                f.write(content)
+
+        library_manager.migrate_stray_companion_dir(db_path)
+
+        comp = library_manager.companion_dir(db_path)
+        self.assertNotEqual(os.path.normpath(comp), os.path.normpath(stray_root))
+        self.assertTrue(os.path.isfile(os.path.join(comp, "art_cache", "9.jpg")))
+        self.assertTrue(os.path.isfile(os.path.join(comp, "trash", "5_Some Song.mp3")))
+        self.assertTrue(os.path.isfile(os.path.join(comp, "backups", "library-20260101-000000.db")))
+        # The stray subfolders should be gone now that they're empty.
+        self.assertFalse(os.path.isdir(os.path.join(stray_root, "art_cache")))
+        self.assertFalse(os.path.isdir(os.path.join(stray_root, "trash")))
+        self.assertFalse(os.path.isdir(os.path.join(stray_root, "backups")))
+
+    def test_migrate_stray_companion_dir_repoints_trash_db_paths(self):
+        # Restoring/purging a trashed file looks it up by the absolute
+        # trash_path recorded in the library's own `trash` table at the
+        # moment it was trashed -- moving the file without also updating
+        # that row would leave restore/purge unable to find it.
+        db_path = os.path.join(self.tmpdir, "StrayTrashDB.nbpmlib")
+        stray_root = os.path.dirname(db_path)
+        stray_trash_dir = os.path.join(stray_root, "trash")
+        os.makedirs(stray_trash_dir, exist_ok=True)
+        stray_file_path = os.path.join(stray_trash_dir, "7_Some Song.mp3")
+        with open(stray_file_path, "wb") as f:
+            f.write(b"audio-bytes")
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE trash (id INTEGER PRIMARY KEY, original_path TEXT, "
+            "trash_path TEXT NOT NULL, artist TEXT, title TEXT, album TEXT, trashed_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO trash (original_path, trash_path, artist, title, album, trashed_at) "
+            "VALUES ('Some Song.mp3', ?, 'Artist', 'Some Song', 'Album', '2026-01-01T00:00:00')",
+            (stray_file_path,),
+        )
+        conn.commit()
+        conn.close()
+
+        library_manager.migrate_stray_companion_dir(db_path)
+
+        comp = library_manager.companion_dir(db_path)
+        expected_new_path = os.path.join(comp, "trash", "7_Some Song.mp3")
+        self.assertTrue(os.path.isfile(expected_new_path))
+        conn = sqlite3.connect(db_path)
+        row = conn.execute("SELECT trash_path FROM trash WHERE id=1").fetchone()
+        conn.close()
+        self.assertEqual(row[0], expected_new_path)
+
+    def test_migrate_stray_companion_dir_is_idempotent(self):
+        db_path = os.path.join(self.tmpdir, "StrayTwice.nbpmlib")
+        open(db_path, "wb").close()
+        stray_root = os.path.dirname(db_path)
+        os.makedirs(os.path.join(stray_root, "art_cache"), exist_ok=True)
+        with open(os.path.join(stray_root, "art_cache", "1.jpg"), "wb") as f:
+            f.write(b"art-bytes")
+
+        library_manager.migrate_stray_companion_dir(db_path)
+        library_manager.migrate_stray_companion_dir(db_path)  # must not error
+
+        comp = library_manager.companion_dir(db_path)
+        self.assertTrue(os.path.isfile(os.path.join(comp, "art_cache", "1.jpg")))
+
+    def test_migrate_stray_companion_dir_never_overwrites_destination(self):
+        db_path = os.path.join(self.tmpdir, "StrayConflict.nbpmlib")
+        open(db_path, "wb").close()
+        stray_root = os.path.dirname(db_path)
+        comp = library_manager.companion_dir(db_path)
+
+        os.makedirs(os.path.join(stray_root, "art_cache"), exist_ok=True)
+        with open(os.path.join(stray_root, "art_cache", "1.jpg"), "wb") as f:
+            f.write(b"stray-version")
+        os.makedirs(os.path.join(comp, "art_cache"), exist_ok=True)
+        with open(os.path.join(comp, "art_cache", "1.jpg"), "wb") as f:
+            f.write(b"correct-version")
+
+        library_manager.migrate_stray_companion_dir(db_path)
+
+        with open(os.path.join(comp, "art_cache", "1.jpg"), "rb") as f:
+            self.assertEqual(f.read(), b"correct-version")
+        # The conflicting stray file is left in place rather than lost.
+        self.assertTrue(os.path.isfile(os.path.join(stray_root, "art_cache", "1.jpg")))
+
+    def test_migrate_stray_companion_dir_noop_for_legacy_library(self):
+        # The legacy library's companion_dir *is* os.path.dirname(db_path)
+        # (its recorded override) -- nothing should move, since there's
+        # nowhere else for it to go.
+        legacy_db = os.path.join(self.tmpdir, "library.db")
+        open(legacy_db, "wb").close()
+        config.update_config(lambda cfg: cfg.__setitem__("recent_libraries", [
+            {"path": legacy_db, "companion_dir_override": os.path.dirname(legacy_db)},
+        ]))
+        os.makedirs(os.path.join(os.path.dirname(legacy_db), "art_cache"), exist_ok=True)
+        with open(os.path.join(os.path.dirname(legacy_db), "art_cache", "1.jpg"), "wb") as f:
+            f.write(b"art-bytes")
+
+        library_manager.migrate_stray_companion_dir(legacy_db)  # must not raise or move anything
+
+        self.assertTrue(os.path.isfile(os.path.join(os.path.dirname(legacy_db), "art_cache", "1.jpg")))
+
     def test_legacy_migration_is_idempotent(self):
         legacy_db = os.path.join(self.tmpdir, "library.db")
         legacy_music_dir = os.path.join(self.tmpdir, "legacy_music")

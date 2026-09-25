@@ -42,11 +42,21 @@ DEFAULT_DB_PATH = os.path.join(jukebox_config.get_app_data_dir(), "library.db")
 DB_PATH = os.environ.get("JUKEBOX_DB_PATH", DEFAULT_DB_PATH)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-ART_CACHE_DIR = os.path.join(os.path.dirname(DB_PATH), "art_cache")
+# Fixes a real bug that predates this call: ART_CACHE_DIR/TRASH_DIR/
+# BACKUP_DIR below used to be computed as plain os.path.dirname(DB_PATH)
+# subfolders, ignoring library_manager's own companion_dir() -- unlike
+# _switch_library() further down, which always used it correctly. Moves
+# anything already sitting in the old, wrong location into the right one
+# first, so this library's real trash/art cache/backups aren't orphaned
+# by the fix. See migrate_stray_companion_dir's own docstring.
+library_manager.migrate_stray_companion_dir(DB_PATH)
+
+_companion_dir = library_manager.companion_dir(DB_PATH)
+ART_CACHE_DIR = os.path.join(_companion_dir, "art_cache")
 os.makedirs(ART_CACHE_DIR, exist_ok=True)
 
-TRASH_DIR = os.path.join(os.path.dirname(DB_PATH), "trash")
-BACKUP_DIR = os.path.join(os.path.dirname(DB_PATH), "backups")
+TRASH_DIR = os.path.join(_companion_dir, "trash")
+BACKUP_DIR = os.path.join(_companion_dir, "backups")
 
 STATIC_DIR = os.environ.get(
     "JUKEBOX_STATIC_DIR",
