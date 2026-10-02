@@ -56,6 +56,11 @@ class SmokeTest(unittest.TestCase):
 
         self.client.post("/api/layout-mode", json={"layoutMode": "classic"})
 
+    def test_instance_endpoint_identifies_the_app_and_its_library(self):
+        data = self.client.get("/api/instance").get_json()
+        self.assertEqual(data["app"], "notorious-bpm")
+        self.assertEqual(data["library"], self.app_module.DB_PATH)
+
     def test_facets_on_empty_library(self):
         resp = self.client.get("/api/facets")
         self.assertEqual(resp.status_code, 200)

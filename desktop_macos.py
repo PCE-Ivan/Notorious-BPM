@@ -17,7 +17,9 @@ directly to try it out:
 
     python3 desktop_macos.py
 """
+import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -28,15 +30,35 @@ import webbrowser
 
 import config as jukebox_config
 
-PORT = int(os.environ.get("JUKEBOX_PORT", "5151"))
+PORT = int(os.environ.get("JUKEBOX_PORT", "5151"))  # preferred port
+ACTIVE_PORT = PORT  # the port this launch actually ended up on -- see main()
 
 
-def _server_already_up():
+def _instance_info(port):
+    """What's answering on `port`, as /api/instance reports it -- or None if
+    nothing is, or it isn't this app (or is an older build without the
+    endpoint). Deliberately not /api/facets: that touches the library, so a
+    perfectly healthy server whose library is momentarily unreadable would
+    look "down" here."""
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/facets", timeout=1)
-        return True
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/instance", timeout=1) as resp:
+            info = json.load(resp)
+        return info if isinstance(info, dict) and info.get("app") == "notorious-bpm" else None
     except Exception:
-        return False
+        return None
+
+
+def _port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _free_port(after):
+    for candidate in range(after + 1, after + 60):
+        if not _port_in_use(candidate):
+            return candidate
+    raise RuntimeError("No free local port found")
 
 
 def _bundled_base_dir():
@@ -82,7 +104,7 @@ def _auto_backup_on_close():
     in app.py. Never blocks the window from actually closing: any failure
     here (server already gone, disk full, ...) is logged and swallowed."""
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/export", timeout=5) as resp:
+        with urllib.request.urlopen(f"http://127.0.0.1:{ACTIVE_PORT}/api/export", timeout=5) as resp:
             content = resp.read()
         backup_dir = os.path.join(jukebox_config.get_app_data_dir(), "backups")
         os.makedirs(backup_dir, exist_ok=True)
@@ -99,7 +121,7 @@ def _auto_backup_on_close():
     # its ffmpeg-based VU/spectrum decode running until its own 15s idle
     # timeout catches it -- harmless, but no reason to wait for that here.
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/radio/levels/stop-all", data=b"", timeout=3)
+        urllib.request.urlopen(f"http://127.0.0.1:{ACTIVE_PORT}/api/radio/levels/stop-all", data=b"", timeout=3)
     except Exception:
         pass
 
@@ -219,8 +241,33 @@ def _touch_protected_locations(jukebox_app):
             log.warning("Startup access probe could not read %s: %s", path, e)
 
 
+def _choose_port(preferred, db_path):
+    """(port, attach). Is something already serving on the preferred port --
+    and is it *this* library? Joining a running server is right when it's
+    this app on this library (a second launch just opens another window on
+    it). It's wrong for anything else: a window silently attached to a
+    different library's server (a dev instance, a test server, another copy
+    of the app) would show and act on the wrong data with nothing to say
+    so. In that case a free port is used and we start our own server."""
+    if not _port_in_use(preferred):
+        return preferred, False
+    info = _instance_info(preferred)
+    if info and os.path.normpath(info.get("library") or "") == os.path.normpath(db_path or ""):
+        return preferred, True
+    return _free_port(preferred), False
+
+
 def main():
-    if not _server_already_up():
+    global ACTIVE_PORT
+    import library_manager
+    db_path, _music = library_manager.resolve_startup()
+
+    port, attach = _choose_port(PORT, db_path)
+    if port != PORT:
+        print(f"Port {PORT} is taken by something else; using {port} instead.", file=sys.stderr)
+    ACTIVE_PORT = port
+
+    if not attach:
         music_dir = jukebox_config.get_music_dir()
         if not music_dir or not os.path.isdir(music_dir):
             picked = _prompt_for_music_folder()
@@ -233,13 +280,13 @@ def main():
         import app as jukebox_app
         _touch_protected_locations(jukebox_app)
         server_thread = threading.Thread(
-            target=lambda: jukebox_app.app.run(host="127.0.0.1", port=PORT, threaded=True, use_reloader=False),
+            target=lambda: jukebox_app.app.run(host="127.0.0.1", port=port, threaded=True, use_reloader=False),
             daemon=True,
         )
         server_thread.start()
 
         for _ in range(60):
-            if _server_already_up():
+            if _instance_info(port):
                 break
             time.sleep(0.5)
         else:
@@ -249,7 +296,7 @@ def main():
     import webview
     api = JsApi()
     window = webview.create_window(
-        "Notorious B.P.M.", f"http://127.0.0.1:{PORT}", width=1200, height=800, min_size=(800, 500),
+        "Notorious B.P.M.", f"http://127.0.0.1:{port}", width=1200, height=800, min_size=(800, 500),
         maximized=True, js_api=api,
     )
     api._window = window

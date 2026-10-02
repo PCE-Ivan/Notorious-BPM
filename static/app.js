@@ -665,6 +665,9 @@ audio.addEventListener("error", () => {
   };
   const reason = reasons[audio.error.code] || "an unknown error occurred";
   showToast(`Couldn't play "${state.currentTrack.title || "this track"}" — ${reason}.`, { kind: "error" });
+  // A file that won't load is very often a disconnected drive or a revoked
+  // permission -- ask the server, which puts the real cause in the banner.
+  if (typeof checkSystemStatus === "function") checkSystemStatus();
 });
 
 function playPrevious() {

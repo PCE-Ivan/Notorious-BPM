@@ -53,21 +53,62 @@ def library_problems(db_path, music_dir):
             problems.append(_permission_problem(db_path))
         except OSError as e:
             problems.append(_problem("library_unreadable", f"The library file can't be read ({e.strerror or e}).", fix="retry", path=db_path))
-    if music_dir:
-        try:
-            os.listdir(music_dir)
-        except FileNotFoundError:
-            problems.append(_problem(
-                "music_missing",
-                f"Your music folder {music_dir} isn't reachable. If it's on an external drive, reconnect "
-                "it — nothing is lost, the library picks up where it left off.",
-                fix="retry", path=music_dir,
-            ))
-        except PermissionError:
-            problems.append(_permission_problem(music_dir))
-        except OSError:
-            pass
+    music = music_problem(music_dir)
+    if music:
+        problems.append(music)
     return problems
+
+
+def _volume_root(path):
+    """/Volumes/<name> for a path on an external/network volume, else None."""
+    parts = os.path.normpath(path).split(os.sep)
+    if len(parts) >= 3 and parts[0] == "" and parts[1] == "Volumes":
+        return os.sep + os.path.join("Volumes", parts[2])
+    return None
+
+
+def music_problem(music_dir):
+    """None if the music folder is readable right now, else a problem dict.
+    Reads one directory entry rather than listing the whole folder -- this
+    runs on a timer, and listing a big folder on a sleeping external drive
+    would spin it up for nothing."""
+    if not music_dir:
+        return None
+    root = _volume_root(music_dir)
+    if root and not os.path.ismount(root):
+        return _problem(
+            "music_missing",
+            f"The drive “{os.path.basename(root)}” isn't connected. Reconnect it — nothing is lost, "
+            "the library picks up where it left off.",
+            fix="retry", path=music_dir,
+        )
+    try:
+        with os.scandir(music_dir) as entries:
+            next(entries, None)
+    except FileNotFoundError:
+        return _problem(
+            "music_missing",
+            f"Your music folder {music_dir} isn't reachable. If it's on an external drive, reconnect "
+            "it — nothing is lost, the library picks up where it left off.",
+            fix="retry", path=music_dir,
+        )
+    except PermissionError:
+        return _permission_problem(music_dir)
+    except OSError:
+        return None
+    return None
+
+
+def music_dir_blocker(music_dir):
+    """A sentence explaining why file-touching work shouldn't start right
+    now, or None. Used before anything that writes tags or moves files: a
+    bulk job started against an unplugged drive doesn't fail cleanly, it
+    produces a pile of per-file errors (or, worse, decides the files are
+    gone)."""
+    if not music_dir:
+        return "Set a music folder first (the Folder button), then try again."
+    problem = music_problem(music_dir)
+    return problem["message"] if problem else None
 
 
 def describe_exception(exc, db_path, music_dir):

@@ -6,6 +6,7 @@
 // an empty library plus a bare "500". The server now diagnoses both (see
 // system_status.py); this puts the explanation, and the one-click fix,
 // where it can't be missed.
+let systemWasOk = true;
 async function checkSystemStatus() {
   let status;
   try {
@@ -16,11 +17,28 @@ async function checkSystemStatus() {
   const banner = el("system-banner");
   if (status.ok) {
     banner.classList.add("hidden");
+    if (!systemWasOk) {
+      // The drive/permission came back mid-session: pick up where we left off.
+      systemWasOk = true;
+      showToast("Reconnected — refreshing your library.", { kind: "success" });
+      loadFacets().then(() => loadTracks(true)).catch(() => {});
+    }
     return true;
   }
+  systemWasOk = false;
   const problem = status.problems[0];
   el("system-banner-text").textContent = problem.message;
   el("system-banner-fix").classList.toggle("hidden", problem.fix !== "open_privacy_settings");
+  banner.classList.remove("hidden");
+  return false;
+}
+
+// An external drive can disappear (or come back) at any moment, long after
+// the one check at launch -- so keep watching. One cheap request every 20s,
+// paused while the window is in the background.
+setInterval(() => { if (document.visibilityState === "visible") checkSystemStatus(); }, 20000);
+
+el("system-banner-fix").classList.toggle("hidden", problem.fix !== "open_privacy_settings");
   banner.classList.remove("hidden");
   return false;
 }

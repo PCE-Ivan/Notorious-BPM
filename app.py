@@ -297,6 +297,14 @@ def _any_background_job_running():
     return jobs.any_running()
 
 
+def _music_blocker_response():
+    """JSON refusal if the music folder can't be read right now (unplugged
+    drive, macOS permission), else None. Called at the top of every route
+    that starts work which writes tags or moves/deletes files."""
+    blocker = system_status.music_dir_blocker(MUSIC_DIR)
+    return jsonify({"started": False, "ok": False, "error": blocker}) if blocker else None
+
+
 @app.route("/api/jobs")
 def jobs_list():
     """Activity tray: every running job plus anything finished recently."""
@@ -333,6 +341,20 @@ def _handle_unexpected_error(e):
     log.exception("Unhandled error on %s %s", request.method, request.path)
     kind, message = system_status.describe_exception(e, DB_PATH, MUSIC_DIR)
     return jsonify({"ok": False, "error": message, "kind": kind}), 500
+
+
+_STARTED_AT = time.time()
+
+
+@app.route("/api/instance")
+def instance_info():
+    """Who is answering. The desktop launcher asks this before attaching a
+    window to a server that's already running on the port, so it can tell
+    "this app, this library" from anything else that happens to be there."""
+    return jsonify({
+        "app": "notorious-bpm", "pid": os.getpid(), "library": DB_PATH,
+        "music_dir": MUSIC_DIR, "started_at": _STARTED_AT,
+    })
 
 
 @app.route("/api/system/status")
@@ -1026,6 +1048,9 @@ def _start_organize_bg():
 
 @app.route("/api/organize-by-artist", methods=["POST"])
 def organize_by_artist_route():
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
     _snapshot_db()
     started = _start_organize_bg()
     return jsonify({"started": started, "error": None if started else "Already running"})
@@ -1050,6 +1075,9 @@ def _run_fill_genres_bg():
 
 @app.route("/api/fill-genres", methods=["POST"])
 def fill_genres_route():
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
     # 200 either way (not a 409) -- "already running" is an expected,
     # normal outcome for the frontend to branch on, not a request failure,
     # and the shared api() helper throws on any non-2xx response.
@@ -1081,6 +1109,9 @@ def fill_years_route():
     """Corrects tracks toward their original release year using Deezer.
     Pass {"track_ids": [...]} to scope it (e.g. to the current filtered
     view); omit it to run across the whole library."""
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
     if not _fill_years_job.start(_run_fill_years_bg, track_ids, guard=_library_lock, prepare=lambda: close_db(None)):
@@ -1175,6 +1206,9 @@ def unify_artist_genre_preview():
 def unify_artist_genre_route():
     """For every artist with more than one genre across their tracks, picks
     the most common one and writes it into every track by that artist."""
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
     if not _unify_genre_job.start(
         _run_unify_genre_bg, guard=_library_lock,
         prepare=lambda: (_snapshot_db(), close_db(None)),
@@ -1215,6 +1249,9 @@ def fix_artist_title_route():
     """Corrects artist/title spelling and capitalization toward Deezer's
     catalog, Picard-style -- see fix_artist_title.py for exactly what is
     and isn't considered safe to auto-correct."""
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
     if not _fix_artist_title_job.start(
         _run_fix_artist_title_bg, guard=_library_lock,
         prepare=lambda: (_snapshot_db(), close_db(None)),
@@ -2127,6 +2164,9 @@ def convert_tracks():
     importlib.reload(convert_audio)
     if fmt not in convert_audio.FORMATS or not track_ids:
         abort(400)
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
     total = _start_convert(track_ids, fmt)
     if total is None:
         return jsonify({"started": False, "error": "Already running"})
@@ -2533,6 +2573,10 @@ def duplicates_auto_clean():
     indistinguishable from broken."""
     data = request.get_json(force=True, silent=True) or {}
     dry_run = data.get("dry_run", True)
+    if not dry_run:
+        blocked = _music_blocker_response()
+        if blocked:
+            return blocked
 
     db = get_db()
     to_delete, groups_cleaned, skipped_groups, repeat_groups_cleaned, same_recording_cleaned = _get_cached_dup_plan(db)
@@ -3135,6 +3179,9 @@ def delete_rated():
     rating = data.get("rating")
     if rating is None or not (1 <= int(rating) <= 5):
         abort(400)
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
     rating = int(rating)
 
     db = get_db()
@@ -3183,6 +3230,9 @@ def delete_tracks_route():
     track_ids = data.get("track_ids") or []
     if not track_ids or not all(isinstance(t, int) for t in track_ids):
         abort(400)
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
 
     db = get_db()
     placeholders = ",".join("?" * len(track_ids))

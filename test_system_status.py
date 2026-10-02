@@ -62,6 +62,19 @@ class LibraryProblemsTest(unittest.TestCase):
         self.assertEqual(kind, "internal")
         self.assertIn("log", message)
 
+    def test_volume_that_isnt_mounted_is_reported_as_a_disconnected_drive(self):
+        problem = system_status.music_problem("/Volumes/DefinitelyNotMountedDrive-12345/Music")
+        self.assertEqual(problem["kind"], "music_missing")
+        self.assertIn("DefinitelyNotMountedDrive-12345", problem["message"])
+        self.assertIn("isn't connected", problem["message"])
+
+    def test_blocker_text_for_missing_unset_and_healthy_music_folder(self):
+        self.assertIn("Set a music folder", system_status.music_dir_blocker(None))
+        shutil.rmtree(self.music)
+        self.assertIn("isn't reachable", system_status.music_dir_blocker(self.music))
+        os.makedirs(self.music)
+        self.assertIsNone(system_status.music_dir_blocker(self.music))
+
     def test_describe_exception_corrupt_database(self):
         kind, _ = system_status.describe_exception(
             sqlite3.DatabaseError("database disk image is malformed"), self.db, self.music)
@@ -106,6 +119,23 @@ class RoutesTest(unittest.TestCase):
         self.assertNotIn("SUPERSECRET", data["text"])
         self.assertEqual(data["info"]["config"]["acoustidApiKey"], "(set)")
         self.assertIn("recent log", data["text"])
+
+    def test_file_touching_jobs_refuse_to_start_when_the_music_folder_is_unreachable(self):
+        with mock.patch.object(self.app_module, "MUSIC_DIR", "/Volumes/DefinitelyNotMountedDrive-12345/Music"):
+            for method, url, body in (
+                ("post", "/api/organize-by-artist", None),
+                ("post", "/api/fill-genres", None),
+                ("post", "/api/fill-years", {}),
+                ("post", "/api/unify-artist-genre", None),
+                ("post", "/api/fix-artist-title", None),
+                ("post", "/api/delete-tracks", {"track_ids": [1]}),
+                ("post", "/api/duplicates/auto-clean", {"dry_run": False}),
+                ("post", "/api/convert-tracks", {"format": "flac", "track_ids": [1]}),
+            ):
+                resp = getattr(self.client, method)(url, json=body) if body is not None else getattr(self.client, method)(url)
+                data = resp.get_json()
+                self.assertFalse(data.get("started"), (url, data))
+                self.assertIn("isn't connected", data["error"], url)
 
     def test_jobs_routes(self):
         self.assertIsInstance(self.client.get("/api/jobs").get_json(), list)
