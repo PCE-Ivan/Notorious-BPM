@@ -56,6 +56,13 @@ class SmokeTest(unittest.TestCase):
 
         self.client.post("/api/layout-mode", json={"layoutMode": "classic"})
 
+    def test_theme_accepts_match_system_and_rejects_unknown(self):
+        for theme in ("system", "graphite", "default"):
+            self.assertEqual(self.client.post("/api/theme", json={"theme": theme}).status_code, 200)
+            self.assertEqual(self.client.get("/api/theme").get_json()["theme"], theme)
+        self.assertEqual(self.client.post("/api/theme", json={"theme": "neon"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/theme").get_json()["theme"], "default")   # the rejected value wasn't saved
+
     def test_instance_endpoint_identifies_the_app_and_its_library(self):
         data = self.client.get("/api/instance").get_json()
         self.assertEqual(data["app"], "notorious-bpm")

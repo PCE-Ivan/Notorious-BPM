@@ -82,8 +82,10 @@ async function loadGridPage() {
   const token = browse.token;
   const kind = state.view;
   el("load-sentinel").textContent = browse.offset ? "Loading more…" : "";
+  const stopSkeleton = browse.offset === 0 ? showSkeleton(el("grid-view"), "skeleton-card", 12) : null;
   try {
     const data = await api(`/${kind}?${trackQueryParams({ sort: browse.sort[kind], limit: 120, offset: browse.offset })}`);
+    if (stopSkeleton) stopSkeleton();
     if (token !== browse.token) return;  // the filters/view changed while this was in flight
     browse.total = data.total;
     data.items.forEach((it) => el("grid-view").appendChild(gridCard(kind, it)));
@@ -98,6 +100,7 @@ async function loadGridPage() {
   } catch (e) {
     showToast(e.message, { kind: "error" });
   } finally {
+    if (stopSkeleton) stopSkeleton();
     browse.loading = false;
   }
   // Few cards (or a tall window) can leave no scrollbar to trigger the next page.

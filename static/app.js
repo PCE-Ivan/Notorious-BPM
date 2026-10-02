@@ -207,8 +207,13 @@ async function loadTracks(reset = false) {
   if (!state.hasMore || state.loadingMore) return;
   state.loadingMore = true;
   el("load-sentinel").textContent = state.offset > 0 ? "Loading more…" : "";
+  // A first page that takes a moment (a big library, a drive waking up)
+  // shows placeholder rows rather than an empty screen -- but only after a
+  // beat, so a quick load never flashes them.
+  const stopSkeleton = state.offset === 0 ? showSkeleton(el("track-list"), "skeleton-row", 14) : null;
   try {
     const data = await api(`/tracks?${trackQueryParams()}`);
+    if (stopSkeleton) stopSkeleton();
     state.total = data.total;
     updateStatsBadge();
     // Mutated in place (not concat'd into a new array): state.currentList is
@@ -245,8 +250,30 @@ async function loadTracks(reset = false) {
     el("select-all-filtered").title = `Select every track matching the current filters (${state.total.toLocaleString()})`;
     el("select-all-filtered").disabled = state.total === 0;
   } finally {
+    if (stopSkeleton) stopSkeleton();
     state.loadingMore = false;
   }
+}
+
+// Placeholder rows/cards for a list that's still loading. Returns a function
+// that removes them (call it as soon as the real content is ready).
+function showSkeleton(container, className, count, delayMs = 180) {
+  let shown = false;
+  const timer = setTimeout(() => {
+    if (container.children.length) return;   // content beat the timer
+    shown = true;
+    for (let i = 0; i < count; i++) {
+      const d = document.createElement("div");
+      d.className = `skeleton ${className}`;
+      d.setAttribute("aria-hidden", "true");
+      container.appendChild(d);
+    }
+  }, delayMs);
+  return () => {
+    clearTimeout(timer);
+    if (shown) container.querySelectorAll(".skeleton").forEach((n) => n.remove());
+    shown = false;
+  };
 }
 
 el("main-scroll").addEventListener("scroll", () => {
@@ -1130,16 +1157,32 @@ state.woodFinish = localStorage.getItem("jukebox-wood-finish") || "walnut";
 state.cassetteDesign = localStorage.getItem("jukebox-cassette-design") || "blue";
 state.vuColor = localStorage.getItem("jukebox-vu-color") || "amber";
 
-function applyTheme(name) {
+// "Match system" is a preference, not a theme: it resolves to Default (light)
+// or Graphite (dark) from the OS appearance, and follows it live. Everything
+// else in the app only ever sees the resolved name in state.theme.
+const systemDarkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+function resolveTheme(pref) {
+  if (pref === "system") return systemDarkQuery && systemDarkQuery.matches ? "graphite" : "default";
+  return pref;
+}
+if (systemDarkQuery) {
+  const onSystemChange = () => { if (state.themePref === "system") applyTheme("system"); };
+  if (systemDarkQuery.addEventListener) systemDarkQuery.addEventListener("change", onSystemChange);
+  else if (systemDarkQuery.addListener) systemDarkQuery.addListener(onSystemChange);
+}
+
+function applyTheme(pref) {
+  const name = resolveTheme(pref);
+  state.themePref = pref;
   state.theme = name;
-  try { localStorage.setItem("jukebox-theme", name); } catch (e) { /* private browsing etc -- fine to skip */ }
+  try { localStorage.setItem("jukebox-theme", pref); } catch (e) { /* private browsing etc -- fine to skip */ }
   // Also saved server-side (see /api/theme) -- localStorage alone isn't
   // enough for the pywebview desktop app, whose WKWebView doesn't persist
   // it across separate launches.
-  api("/theme", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme: name }) }).catch(() => {});
+  api("/theme", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme: pref }) }).catch(() => {});
   document.body.dataset.theme = name;
   if (pipWindow) pipWindow.document.body.dataset.theme = name;
-  el("theme-select").value = name;
+  el("theme-select").value = pref;
 
   Object.values(THEME_PANELS).forEach((id) => el(id).classList.add("hidden"));
   if (THEME_PANELS[name]) {
@@ -1377,7 +1420,7 @@ async function popOutPlayer() {
     barParent.insertBefore(bar, barNext);
     pipWindow = null;
     el("popout-btn").classList.remove("active");
-    applyTheme(state.theme);
+    applyTheme(state.themePref || state.theme);
     fitStagePanel();
   }, { once: true });
 }
@@ -5548,7 +5591,7 @@ async function loadCurrentFolder() {
   // already gave state.theme above if the request fails for any reason.
   try {
     const saved = await api("/theme");
-    if (saved && saved.theme) state.theme = saved.theme;
+    if (saved && saved.theme) state.theme = saved.theme;   // the saved *preference* (may be "system"); applyTheme resolves it
   } catch (e) { /* offline/first run -- localStorage-derived default stands */ }
   try {
     const savedWood = await api("/wood-finish");

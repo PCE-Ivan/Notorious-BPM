@@ -1962,7 +1962,7 @@ def get_theme():
 # can't get saved and silently produce an unstyled/broken UI with no
 # fallback and no error, which is what plain isinstance(str)-only
 # validation allowed before.
-VALID_THEMES = {"default", "graphite", "hifi", "cassette", "vinyl"}
+VALID_THEMES = {"system", "default", "graphite", "hifi", "cassette", "vinyl"}
 VALID_WOOD_FINISHES = {"walnut", "ebony", "mahogany"}
 VALID_CASSETTE_DESIGNS = {"blue", "red", "rust"}
 VALID_VU_COLORS = {"amber", "blue", "green"}

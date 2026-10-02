@@ -64,37 +64,38 @@
           <button id="open-command-palette" class="btn-secondary topbar-action-btn" title="Browse every library tool in one list">⌘ Tools</button>
           <button id="toggle-sidebar-filters" class="btn-secondary topbar-action-btn" title="Show or hide the filter panel">▾ Filters</button>
         </div>
-        <div class="topbar-library-status">
-          <div id="library-control" class="library-control">
-            <button id="library-menu-btn" class="btn-secondary topbar-action-btn" title="Switch, create, or open a library">
-              📚 <span id="library-name">Library</span> ▾
-            </button>
-            <div id="library-menu" class="library-menu hidden">
-              <button id="library-new" class="library-menu-item">New Library…</button>
-              <button id="library-open" class="library-menu-item">Open Library…</button>
-              <div class="library-menu-divider"></div>
-              <button id="library-add-files" class="library-menu-item">Add music files…</button>
-              <button id="library-add-folder" class="library-menu-item">Add a folder of music…</button>
-              <div class="library-menu-divider"></div>
-              <div class="library-menu-label">Recent</div>
-              <div id="library-recent-list" class="library-recent-list"></div>
-            </div>
+      </div>
+
+      <div class="topbar-library-status">
+        <div id="library-control" class="library-control">
+          <button id="library-menu-btn" class="btn-secondary topbar-action-btn" title="Switch, create, or open a library">
+            📚 <span id="library-name">Library</span> ▾
+          </button>
+          <div id="library-menu" class="library-menu hidden">
+            <button id="library-new" class="library-menu-item">New Library…</button>
+            <button id="library-open" class="library-menu-item">Open Library…</button>
+            <div class="library-menu-divider"></div>
+            <button id="library-add-files" class="library-menu-item">Add music files…</button>
+            <button id="library-add-folder" class="library-menu-item">Add a folder of music…</button>
+            <div class="library-menu-divider"></div>
+            <div class="library-menu-label">Recent</div>
+            <div id="library-recent-list" class="library-recent-list"></div>
           </div>
-          <div class="topbar-divider"></div>
-          <div class="stats-block">
-            <div class="stats" id="stats"></div>
-            <div class="current-folder" id="current-folder" title=""></div>
-          </div>
-          <div class="scan-btn-group">
-            <div class="scan-btn-row">
-              <button id="choose-folder" class="btn-secondary topbar-action-btn" title="Pick a different music folder to scan and use">📁 Folder</button>
-              <button id="rescan-library" class="btn-secondary topbar-action-btn" title="Re-scan the music folder for new/changed files">⟳ Rescan</button>
-            </div>
-            <div id="scan-progress" class="scan-progress hidden"><div id="scan-progress-fill" class="scan-progress-fill"></div></div>
-          </div>
-          <div class="topbar-divider"></div>
-          <button id="convert-menu" class="btn-secondary topbar-action-btn tile-risky" title="Convert selected tracks or a whole playlist to another format — writes new files">⇄ Convert</button>
         </div>
+        <div class="topbar-divider"></div>
+        <div class="stats-block">
+          <div class="stats" id="stats"></div>
+          <div class="current-folder" id="current-folder" title=""></div>
+        </div>
+        <div class="scan-btn-group">
+          <div class="scan-btn-row">
+            <button id="choose-folder" class="btn-secondary topbar-action-btn" title="Pick a different music folder to scan and use">📁 Folder</button>
+            <button id="rescan-library" class="btn-secondary topbar-action-btn" title="Re-scan the music folder for new/changed files">⟳ Rescan</button>
+          </div>
+          <div id="scan-progress" class="scan-progress hidden"><div id="scan-progress-fill" class="scan-progress-fill"></div></div>
+        </div>
+        <div class="topbar-divider"></div>
+        <button id="convert-menu" class="btn-secondary topbar-action-btn tile-risky" title="Convert selected tracks or a whole playlist to another format — writes new files">⇄ Convert</button>
       </div>
 
       <div class="topbar-divider"></div>
@@ -125,6 +126,7 @@
       <div class="topbar-group topbar-appearance" title="Player theme and stage controls">
         <label class="topbar-group-label" for="theme-select">Theme</label>
         <select id="theme-select" class="theme-select">
+          <option value="system">Match system</option>
           <option value="default">Default</option>
           <option value="graphite">Graphite</option>
           <option value="hifi">Hi-Fi</option>

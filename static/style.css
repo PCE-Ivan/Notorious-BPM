@@ -2356,3 +2356,10 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; text-align: cen
 .drop-overlay-card { padding: 36px 48px; text-align: center; background: var(--bg-elevated); border: 2px dashed var(--accent); max-width: 80vw; }
 .drop-overlay-title { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
 .drop-overlay-sub { color: var(--text-dim); font-size: 13px; }
+
+/* ------------------------------------------------------ loading skeletons -- */
+.skeleton { background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--bg-hover) 50%, var(--bg-elevated) 75%); background-size: 200% 100%; animation: skeleton-shimmer 1.3s linear infinite; }
+.skeleton-row { height: 44px; margin: 0 0 1px; opacity: .6; }
+.skeleton-card { aspect-ratio: 1 / 1.35; border: 1px solid var(--border); opacity: .6; }
+@keyframes skeleton-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
