@@ -23,6 +23,22 @@ macOS, Windows, and Linux.
   folders, preserving ratings and playlists
 - Format conversion, trash (soft delete), automatic rating/playlist
   backup on every quit
+- Tracks / Albums / Artists views (cover grids), keyboard-first browsing
+  (J/K, Enter, X, shift-click ranges — see Help ▸ Keyboard), drag and drop
+  files or folders onto the window to add them (duplicates skipped)
+- Find duplicates **by sound** — compares audio fingerprints locally (no
+  network), so renamed or re-tagged copies are found too; cached, so only
+  the first run is slow
+- "Level volume across tracks" (ReplayGain-style, opt-in), measured once in
+  the background
+- Verify tags against the audio via AcoustID, for the whole library, resumable
+
+**Reliability**
+- Every long task runs as a cancellable background job (Activity tray)
+- Library health check (index vs. disk), change history with Undo for bulk
+  tag edits and file moves, readable errors, rotating logs, and a "Copy
+  diagnostics" button in About
+- Notices an unplugged drive or a macOS folder-permission block and says so
 
 **Player themes**
 - **Default** / **Graphite** — clean, minimal
@@ -63,9 +79,11 @@ fully without them, these just unlock a couple of Live Radio features:
 - **`ffmpeg`** — powers the Hi-Fi/Cassette themes' VU meters and spectrum
   bars *for internet radio specifically* (local file playback doesn't
   need it).
-- **`chromaprint`** (provides `fpcalc`) — powers "Identify this song".
-  Needs a free [AcoustID](https://acoustid.org/new-application) API key,
-  which the app prompts for the first time you use it.
+- **`chromaprint`** (provides `fpcalc`) — powers "Identify this song" (needs
+  a free [AcoustID](https://acoustid.org/new-application) API key, which the
+  app prompts for the first time you use it) and finding duplicates by sound
+  (no key needed).
+- `ffmpeg` is also used to measure loudness for volume leveling.
 
 ## Development
 
@@ -76,6 +94,21 @@ directly by the Flask backend in `app.py`. Run it straight from source:
 pip install -r requirements.txt
 python3 launcher.py
 ```
+
+Tests: `./run_tests.sh` runs every `test_*.py` in its own process with `HOME`
+pointed at a throwaway directory (never combine test files in one process —
+`app.py` fixes its library paths when first imported). Tests only ever touch
+scratch libraries.
+
+`static/` is split by feature (`app.js` core + player, `ipod.js`,
+`tagcheck.js`, `duplicates.js`, `radio.js`, `browse.js`, `keys.js`,
+`activity.js`, `import.js`, `health.js`, `history.js`), classic scripts
+sharing one global scope and loaded in the order `index.html` lists them.
+`test_frontend_syntax.py` and `test_frontend_ids.py` catch a script that
+doesn't parse or an `el("id")` with no matching element.
+
+For stable code-signing across rebuilds (so macOS keeps the folder-access
+grants) see `setup_signing.sh` and the signing step in `build_macos.sh`.
 
 ## License
 
