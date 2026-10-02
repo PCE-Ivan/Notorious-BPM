@@ -42,6 +42,11 @@ a = Analysis(
         "mutagen.easyid3", "mutagen.easymp4", "mutagen.id3",
         "werkzeug.serving",
         "webview.platforms.cocoa",
+        # imported lazily inside desktop_macos.py (drag-and-drop, menu bar)
+        "webview.menu", "webview.dom", "webview.dom.dom", "webview.dom.element",
+        "webview.dom.event", "webview.dom.classlist", "webview.dom.propsdict",
+        # app.py imports these at the top; listed anyway so a refactor can't silently drop them
+        "audio_dupes", "loudness", "importer", "organize_by_artist", "art_lookup", "ipod_import",
         "scan_library", "fill_genres", "fill_years", "unify_artist_genre",
         "fix_artist_title", "convert_audio",
         "tkinter", "tkinter.filedialog",
