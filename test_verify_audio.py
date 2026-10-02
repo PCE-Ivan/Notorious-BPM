@@ -13,14 +13,20 @@ import tempfile
 import unittest
 from unittest import mock
 
+# Set up at import time, before any test class can import app: unittest runs
+# classes alphabetically, so FingerprintLookupTest imported app *first* --
+# against the real config and library, since this setup used to live in
+# TagsLookMismatchedTest.setUpClass, which ran later.
+_TMPDIR = tempfile.mkdtemp(prefix="jukebox-verifytest-")
+os.environ["JUKEBOX_DB_PATH"] = os.path.join(_TMPDIR, "library.db")
+os.environ["JUKEBOX_CONFIG_PATH"] = os.path.join(_TMPDIR, "config.json")
+os.environ["JUKEBOX_MUSIC_DIR"] = _TMPDIR
+
 
 class TagsLookMismatchedTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmpdir = tempfile.mkdtemp(prefix="jukebox-verifytest-")
-        os.environ["JUKEBOX_DB_PATH"] = os.path.join(cls.tmpdir, "library.db")
-        os.environ["JUKEBOX_CONFIG_PATH"] = os.path.join(cls.tmpdir, "config.json")
-        os.environ["JUKEBOX_MUSIC_DIR"] = cls.tmpdir
+        cls.tmpdir = _TMPDIR
         global app
         import app as app_module
         app = app_module

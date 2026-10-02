@@ -26,6 +26,7 @@ import urllib.request
 import mutagen
 
 import config as jukebox_config
+import tagio
 
 DEFAULT_DB_PATH = os.path.join(jukebox_config.get_app_data_dir(), "library.db")
 DB_PATH = os.environ.get("JUKEBOX_DB_PATH", DEFAULT_DB_PATH)
@@ -97,35 +98,7 @@ def _earliest_year(candidates, artist):
 
 
 def _write_file_year(fpath, year):
-    lower = fpath.lower()
-    try:
-        if lower.endswith(".flac"):
-            from mutagen.flac import FLAC
-            audio = FLAC(fpath)
-            audio["date"] = [str(year)]
-            audio["originaldate"] = [str(year)]
-            audio.save()
-        elif lower.endswith(".mp3"):
-            from mutagen.id3 import ID3NoHeaderError
-            from mutagen.easyid3 import EasyID3
-            try:
-                audio = EasyID3(fpath)
-            except ID3NoHeaderError:
-                audio = mutagen.File(fpath, easy=True)
-                audio.add_tags()
-            audio["date"] = [str(year)]
-            audio["originaldate"] = [str(year)]
-            audio.save()
-        elif lower.endswith(".m4a"):
-            from mutagen.mp4 import MP4
-            audio = MP4(fpath)
-            audio["\xa9day"] = [str(year)]
-            audio.save()
-        else:
-            return False
-        return True
-    except Exception:
-        return False
+    return tagio.write_tag(fpath, "year", year)
 
 
 def fix_release_years(progress_cb=None, track_ids=None):

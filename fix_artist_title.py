@@ -34,6 +34,7 @@ import time
 
 import config as jukebox_config
 from fill_genres import DEEZER_SEARCH, _EDITION_BRACKET_RE, _http_json, _search_title
+import tagio
 
 DEFAULT_DB_PATH = os.path.join(jukebox_config.get_app_data_dir(), "library.db")
 DB_PATH = os.environ.get("JUKEBOX_DB_PATH", DEFAULT_DB_PATH)
@@ -181,37 +182,7 @@ def _lookup_correction(row):
 
 
 def _write_file_artist_title(fpath, artist, title):
-    lower = fpath.lower()
-    try:
-        if lower.endswith(".flac"):
-            from mutagen.flac import FLAC
-            audio = FLAC(fpath)
-            audio["artist"] = [artist]
-            audio["title"] = [title]
-            audio.save()
-        elif lower.endswith(".mp3"):
-            import mutagen
-            from mutagen.id3 import ID3NoHeaderError
-            from mutagen.easyid3 import EasyID3
-            try:
-                audio = EasyID3(fpath)
-            except ID3NoHeaderError:
-                audio = mutagen.File(fpath, easy=True)
-                audio.add_tags()
-            audio["artist"] = [artist]
-            audio["title"] = [title]
-            audio.save()
-        elif lower.endswith(".m4a"):
-            from mutagen.mp4 import MP4
-            audio = MP4(fpath)
-            audio["\xa9ART"] = [artist]
-            audio["\xa9nam"] = [title]
-            audio.save()
-        else:
-            return False
-        return True
-    except Exception:
-        return False
+    return tagio.write_tags(fpath, {"artist": artist, "title": title})
 
 
 def _all_tracks(conn, track_ids=None):

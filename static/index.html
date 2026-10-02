@@ -249,6 +249,7 @@
         <button id="open-trash" class="btn-secondary">🗑 Trash</button>
         <button id="open-stats" class="btn-secondary">📊 Stats</button>
         <button id="open-export" class="btn-secondary">⇄ Backup</button>
+        <button id="open-history" class="btn-secondary" title="Undo a bulk tag edit or file move">🕘 History</button>
         <button id="open-health" class="btn-secondary" title="Check the library against the disk and caches">🩺 Health</button>
         <button id="open-help" class="btn-secondary">❓ Help</button>
         <button id="open-about" class="btn-secondary">ℹ️ About</button>
@@ -1061,6 +1062,19 @@
   </div>
 </div>
 
+<div id="history-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel health-panel">
+    <div class="dup-panel-header">
+      <h3>Change history</h3>
+      <button id="history-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p class="dup-summary-text">Bulk tag edits and file moves, newest first. Undo puts the files and the library back as they were — a tag you've edited again since is left alone.</p>
+      <div id="history-list" class="health-issues"></div>
+    </div>
+  </div>
+</div>
+
 <div id="health-backdrop" class="modal-backdrop hidden">
   <div class="dup-panel health-panel">
     <div class="dup-panel-header">
@@ -1204,5 +1218,6 @@
 <script src="app.js"></script>
 <script src="activity.js"></script>
 <script src="health.js"></script>
+<script src="history.js"></script>
 </body>
 </html>

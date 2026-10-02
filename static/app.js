@@ -781,6 +781,7 @@ const SEARCH_COMMANDS = [
   { cmd: "backup", label: "Backup library", btn: "open-export", group: "System" },
   { cmd: "stats", label: "Library stats", btn: "open-stats", group: "System" },
   { cmd: "health", label: "Library health check", btn: "open-health", group: "System" },
+  { cmd: "history", label: "Change history / undo", btn: "open-history", group: "System" },
 ];
 
 function runSearchCommand(command) {

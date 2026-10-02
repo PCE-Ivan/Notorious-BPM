@@ -18,6 +18,7 @@ from collections import Counter
 import mutagen
 
 import config as jukebox_config
+import tagio
 
 DEFAULT_DB_PATH = os.path.join(jukebox_config.get_app_data_dir(), "library.db")
 DB_PATH = os.environ.get("JUKEBOX_DB_PATH", DEFAULT_DB_PATH)
@@ -115,33 +116,7 @@ def _genre_for_album(album_id):
 
 
 def _write_file_genre(fpath, genre):
-    lower = fpath.lower()
-    try:
-        if lower.endswith(".flac"):
-            from mutagen.flac import FLAC
-            audio = FLAC(fpath)
-            audio["genre"] = [genre]
-            audio.save()
-        elif lower.endswith(".mp3"):
-            from mutagen.id3 import ID3NoHeaderError
-            from mutagen.easyid3 import EasyID3
-            try:
-                audio = EasyID3(fpath)
-            except ID3NoHeaderError:
-                audio = mutagen.File(fpath, easy=True)
-                audio.add_tags()
-            audio["genre"] = [genre]
-            audio.save()
-        elif lower.endswith(".m4a"):
-            from mutagen.mp4 import MP4
-            audio = MP4(fpath)
-            audio["\xa9gen"] = [genre]
-            audio.save()
-        else:
-            return False
-        return True
-    except Exception:
-        return False
+    return tagio.write_tag(fpath, "genre", genre)
 
 
 def fill_missing_genres(progress_cb=None, track_ids=None):

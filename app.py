@@ -25,9 +25,11 @@ from flask import Flask, g, jsonify, request, send_file, abort, send_from_direct
 import config as jukebox_config
 import health
 import jobs
+import journal
 import logging
 import logging_setup
 import system_status
+import tagio
 from werkzeug.exceptions import HTTPException
 from fs_safety import safe_move
 import library_manager
@@ -451,6 +453,39 @@ def health_repair_route():
         )
     log.info("Health repair applied: %s", results)
     return jsonify({"ok": True, "results": results})
+
+
+# ------------------------------------------------------ change history / undo --
+_undo_job = jobs.Job(
+    "undo", "Undoing a change",
+    summarize=lambda s: "restored {r}, skipped {k} (changed since), {e} failed".format(
+        r=(s["result"] or {}).get("restored", 0), k=(s["result"] or {}).get("skipped", 0),
+        e=(s["result"] or {}).get("errors", 0)),
+)
+_undo_state = _undo_job.state
+
+
+def _run_undo_bg(op_id):
+    _undo_state["result"] = journal.undo(DB_PATH, MUSIC_DIR, op_id, progress=_undo_job.progress)
+
+
+@app.route("/api/history")
+def history_list():
+    return jsonify(journal.list_operations(DB_PATH))
+
+
+@app.route("/api/history/<int:op_id>/undo", methods=["POST"])
+def history_undo(op_id):
+    if not _undo_job.start(
+        _run_undo_bg, op_id, guard=_library_lock, prepare=lambda: (_snapshot_db(), close_db(None)),
+    ):
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True})
+
+
+@app.route("/api/history/progress")
+def history_progress():
+    return jsonify(_undo_state)
 
 
 # Shared by /api/rescan and /api/choose-folder -- both ultimately just run
@@ -977,6 +1012,10 @@ def _run_organize_bg():
                 f"Files were moved on disk, but updating the library index failed "
                 f"({last_err}). Run Rescan to re-sync the library."
             )
+        # Recorded after the index points at the new paths, so each move can
+        # be matched to its track -- this is what makes "Organize" undoable.
+        with journal.operation(DB_PATH, MUSIC_DIR, "organize", "Organized files into artist folders"):
+            journal.record_moves(path_moves)
 
     _organize_state["result"] = stats
 
@@ -1005,7 +1044,8 @@ def _run_fill_genres_bg():
     import importlib
     import fill_genres
     importlib.reload(fill_genres)
-    _fill_genres_state["result"] = fill_genres.fill_missing_genres(progress_cb=_fill_genres_job.progress)
+    with journal.operation(DB_PATH, MUSIC_DIR, "fill_genres", "Filled in missing genres"):
+        _fill_genres_state["result"] = fill_genres.fill_missing_genres(progress_cb=_fill_genres_job.progress)
 
 
 @app.route("/api/fill-genres", methods=["POST"])
@@ -1032,7 +1072,8 @@ def _run_fill_years_bg(track_ids):
     import fill_years
     importlib.reload(fill_years)
     _snapshot_db()
-    _fill_years_state["result"] = fill_years.fix_release_years(progress_cb=_fill_years_job.progress, track_ids=track_ids)
+    with journal.operation(DB_PATH, MUSIC_DIR, "fill_years", "Corrected release years"):
+        _fill_years_state["result"] = fill_years.fix_release_years(progress_cb=_fill_years_job.progress, track_ids=track_ids)
 
 
 @app.route("/api/fill-years", methods=["POST"])
@@ -1116,7 +1157,8 @@ def _run_unify_genre_bg():
     import importlib
     import unify_artist_genre
     importlib.reload(unify_artist_genre)
-    _unify_genre_state["result"] = unify_artist_genre.unify_artist_genres(progress_cb=_unify_genre_job.progress)
+    with journal.operation(DB_PATH, MUSIC_DIR, "unify_genre", "Unified genre per artist"):
+        _unify_genre_state["result"] = unify_artist_genre.unify_artist_genres(progress_cb=_unify_genre_job.progress)
 
 
 @app.route("/api/unify-artist-genre/preview")
@@ -1154,7 +1196,8 @@ def _run_fix_artist_title_bg():
     import importlib
     import fix_artist_title
     importlib.reload(fix_artist_title)
-    _fix_artist_title_state["result"] = fix_artist_title.fix_artist_title(progress_cb=_fix_artist_title_job.progress)
+    with journal.operation(DB_PATH, MUSIC_DIR, "fix_artist_title", "Corrected artist & track names"):
+        _fix_artist_title_state["result"] = fix_artist_title.fix_artist_title(progress_cb=_fix_artist_title_job.progress)
 
 
 @app.route("/api/fix-artist-title/preview")
@@ -1393,41 +1436,9 @@ def tags_audit():
 
 def _write_file_tag(fpath, field, value):
     """Writes a single artist/album/title/genre/year field to the audio
-    file's own tags, format-specific like fill_genres.py's genre writer."""
-    lower = fpath.lower()
-    try:
-        if lower.endswith(".flac"):
-            from mutagen.flac import FLAC
-            audio = FLAC(fpath)
-            key = {"artist": "artist", "album": "album", "title": "title",
-                   "genre": "genre", "year": "date"}[field]
-            audio[key] = [str(value)]
-            audio.save()
-        elif lower.endswith(".mp3"):
-            import mutagen
-            from mutagen.id3 import ID3NoHeaderError
-            from mutagen.easyid3 import EasyID3
-            try:
-                audio = EasyID3(fpath)
-            except ID3NoHeaderError:
-                audio = mutagen.File(fpath, easy=True)
-                audio.add_tags()
-            key = {"artist": "artist", "album": "album", "title": "title",
-                   "genre": "genre", "year": "date"}[field]
-            audio[key] = [str(value)]
-            audio.save()
-        elif lower.endswith(".m4a"):
-            from mutagen.mp4 import MP4
-            audio = MP4(fpath)
-            key = {"artist": "\xa9ART", "album": "\xa9alb", "title": "\xa9nam",
-                   "genre": "\xa9gen", "year": "\xa9day"}[field]
-            audio[key] = [str(value)]
-            audio.save()
-        else:
-            return False
-        return True
-    except Exception:
-        return False
+    file's own tags (see tagio.py -- shared with the bulk tools, and what
+    journals each change so it can be undone)."""
+    return tagio.write_tag(fpath, field, value)
 
 
 @app.route("/api/tags/<int:track_id>", methods=["POST"])
@@ -1448,7 +1459,9 @@ def update_tag(track_id):
     if not os.path.isfile(fpath):
         abort(404)
 
-    if not _write_file_tag(fpath, field, value):
+    with journal.operation(DB_PATH, MUSIC_DIR, "edit_tags", "Edited tags by hand", batch=data.get("batch")):
+        wrote = _write_file_tag(fpath, field, value)
+    if not wrote:
         return jsonify({"ok": False, "error": "Could not write to the file"}), 500
 
     if field == "genre":
