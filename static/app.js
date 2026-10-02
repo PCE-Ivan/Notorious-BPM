@@ -5,6 +5,7 @@ const state = {
   offset: 0, pageSize: 100, total: 0, loadingMore: false, hasMore: true,
   currentTrack: null, // full track object
   currentList: [], // list currently being browsed/played from (for "next" fallback)
+  libraryRows: [], // every row of the main library list loaded so far (the list itself is windowed -- see renderLibraryWindow)
   history: [], // ids played this session, for excluding
   playHistory: [], // full track objects in play order, for the sidebar previous-track button
   historyPos: -1, // index into playHistory of the currently playing track
@@ -188,8 +189,9 @@ async function loadTracks(reset = false) {
   if (reset) {
     state.offset = 0;
     state.hasMore = true;
-    state.currentList = [];
-    el("track-list").innerHTML = "";
+    state.libraryRows = [];
+    state.currentList = state.libraryRows;
+    resetLibraryWindow();
     clearSelection();
   }
   if (!state.hasMore || state.loadingMore) return;
@@ -199,8 +201,12 @@ async function loadTracks(reset = false) {
     const data = await api(`/tracks?${trackQueryParams()}`);
     state.total = data.total;
     updateStatsBadge();
-    state.currentList = state.currentList.concat(data.tracks);
-    renderTrackList(el("track-list"), data.tracks, { showAdd: true, append: true });
+    // Mutated in place (not concat'd into a new array): state.currentList is
+    // the same array, which is what next/previous walk -- so a page that
+    // loads while a track is playing extends the list playback sees too.
+    state.libraryRows.push(...data.tracks);
+    state.currentList = state.libraryRows;
+    renderLibraryWindow();
     state.offset += data.tracks.length;
     state.hasMore = state.offset < state.total;
     if (state.total === 0 && state.offset === 0) {
@@ -211,6 +217,7 @@ async function loadTracks(reset = false) {
       // itself. A search or filter is active whenever this fires (an
       // actually-empty library fails the choose-folder flow before ever
       // reaching this screen), so the suggestion is always relevant.
+      resetLibraryWindow();
       el("track-list").innerHTML = `
         <div class="empty-state">
           <div class="empty-state-icon">🔍</div>
@@ -234,11 +241,18 @@ async function loadTracks(reset = false) {
 
 el("main-scroll").addEventListener("scroll", () => {
   if (el("library-view").classList.contains("hidden")) return;
+  scheduleLibraryWindow();
   const c = el("main-scroll");
   if (c.scrollTop + c.clientHeight > c.scrollHeight - 600) {
     loadTracks(false);
   }
 });
+
+// Coming back to the library from a playlist (any of the places that
+// un-hide it): re-fit the window to wherever the scroller is now.
+new MutationObserver(() => {
+  if (!el("library-view").classList.contains("hidden")) scheduleLibraryWindow();
+}).observe(el("library-view"), { attributes: true, attributeFilter: ["class"] });
 
 function starString(rating) {
   if (!rating) return "";
@@ -279,79 +293,226 @@ function artUrl(trackId, thumb) {
   return `${API}/art/${trackId}${thumb ? "?thumb=1" : ""}`;
 }
 
+// One track row. `contextList` is what clicking it plays through (next/
+// previous walk it) -- the whole loaded library for the main list, the page
+// for a playlist view.
+function buildTrackRow(t, displayIdx, { showAdd, contextList }) {
+  const row = document.createElement("div");
+  row.className = "track-row";
+  row.dataset.id = t.id;
+  if (state.currentTrack && state.currentTrack.id === t.id) row.classList.add("playing");
+  if (state.selected.has(t.id)) row.classList.add("selected");
+  row.innerHTML = `
+    <div class="col-check"><input type="checkbox" ${state.selected.has(t.id) ? "checked" : ""}></div>
+    <div class="col-art">${t.has_art === 0 ? "" : `<img loading="lazy" src="${artUrl(t.id, true)}" alt="" onerror="this.remove()">`}</div>
+    <div class="col-idx">${displayIdx}</div>
+    <div class="col-title" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "")}</div>
+    <div class="col-artist" title="${escapeHtml(t.artist || "")}">${escapeHtml(t.artist || "")}</div>
+    <div class="col-genre" title="${escapeHtml(t.primary_genre || "")}">${escapeHtml(t.primary_genre || "")}</div>
+    <div class="col-year">${t.year || ""}</div>
+    <div class="col-rating row-stars">${rowStarsHtml(t.rating || 0)}</div>
+    <div class="col-queue" title="Play next">▸</div>
+    <div class="col-add" title="Add to playlist">${showAdd ? "+" : ""}</div>
+    <div class="col-lookup" title="Look up this track's genre, year, artist &amp; title on Deezer">🔍</div>
+  `;
+  row.addEventListener("click", (e) => {
+    if (e.target.closest(".col-add") || e.target.closest(".col-check") || e.target.closest(".col-queue") || e.target.closest(".row-stars") || e.target.closest(".col-lookup")) return;
+    playTrack(t, contextList);
+  });
+  row.querySelector(".col-check input").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSelection(t.id, row);
+  });
+  row.querySelector(".col-queue").addEventListener("click", (e) => {
+    e.stopPropagation();
+    queueTrackNext(t, e.currentTarget);
+  });
+  const rowStars = row.querySelector(".row-stars");
+  rowStars.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const starEl = e.target.closest("span[data-star]");
+    if (!starEl) return;
+    rateTrack(t, Number(starEl.dataset.star), rowStars).then((rating) => {
+      const violatesFilter = (state.ratedOnly && rating === 0) || (state.rating && Number(state.rating) !== rating);
+      if (violatesFilter) {
+        row.style.transition = "opacity .2s ease";
+        row.style.opacity = "0";
+        setTimeout(() => removeTrackRow(t.id, row), 200);
+      }
+    });
+  });
+  rowStars.addEventListener("mousemove", (e) => {
+    const starEl = e.target.closest("span[data-star]");
+    if (!starEl) return;
+    const hoverRating = Number(starEl.dataset.star);
+    rowStars.querySelectorAll("span").forEach((s) => s.classList.toggle("filled", Number(s.dataset.star) <= hoverRating));
+  });
+  rowStars.addEventListener("mouseleave", () => {
+    rowStars.querySelectorAll("span").forEach((s) => s.classList.toggle("filled", Number(s.dataset.star) <= (t.rating || 0)));
+  });
+  if (showAdd) {
+    row.querySelector(".col-add").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openAddToPlaylistModal([t.id]);
+    });
+  }
+  row.querySelector(".col-lookup").addEventListener("click", (e) => {
+    e.stopPropagation();
+    lookupTrackTags(t, row, e.currentTarget);
+  });
+  row.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showTrackContextMenu(e, t, row);
+  });
+  return row;
+}
+
+// Playlist views (and anything else that isn't the main library list) just
+// render every row they're given. The main library list is windowed -- see
+// renderLibraryWindow below.
 function renderTrackList(container, list, { showAdd, append } = {}) {
   if (!append) container.innerHTML = "";
   const baseIdx = append ? container.children.length : 0;
   list.forEach((t, i) => {
-    const row = document.createElement("div");
-    row.className = "track-row";
-    row.dataset.id = t.id;
-    if (state.currentTrack && state.currentTrack.id === t.id) row.classList.add("playing");
-    if (state.selected.has(t.id)) row.classList.add("selected");
-    row.innerHTML = `
-      <div class="col-check"><input type="checkbox" ${state.selected.has(t.id) ? "checked" : ""}></div>
-      <div class="col-art"><img loading="lazy" src="${artUrl(t.id, true)}" alt="" onerror="this.remove()"></div>
-      <div class="col-idx">${baseIdx + i + 1}</div>
-      <div class="col-title" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "")}</div>
-      <div class="col-artist" title="${escapeHtml(t.artist || "")}">${escapeHtml(t.artist || "")}</div>
-      <div class="col-genre" title="${escapeHtml(t.primary_genre || "")}">${escapeHtml(t.primary_genre || "")}</div>
-      <div class="col-year">${t.year || ""}</div>
-      <div class="col-rating row-stars">${rowStarsHtml(t.rating || 0)}</div>
-      <div class="col-queue" title="Play next">▸</div>
-      <div class="col-add" title="Add to playlist">${showAdd ? "+" : ""}</div>
-      <div class="col-lookup" title="Look up this track's genre, year, artist &amp; title on Deezer">🔍</div>
-    `;
-    row.addEventListener("click", (e) => {
-      if (e.target.closest(".col-add") || e.target.closest(".col-check") || e.target.closest(".col-queue") || e.target.closest(".row-stars") || e.target.closest(".col-lookup")) return;
-      playTrack(t, list);
-    });
-    row.querySelector(".col-check input").addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleSelection(t.id, row);
-    });
-    row.querySelector(".col-queue").addEventListener("click", (e) => {
-      e.stopPropagation();
-      queueTrackNext(t, e.currentTarget);
-    });
-    const rowStars = row.querySelector(".row-stars");
-    rowStars.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const starEl = e.target.closest("span[data-star]");
-      if (!starEl) return;
-      rateTrack(t, Number(starEl.dataset.star), rowStars).then((rating) => {
-        const violatesFilter = (state.ratedOnly && rating === 0) || (state.rating && Number(state.rating) !== rating);
-        if (violatesFilter) {
-          row.style.transition = "opacity .2s ease";
-          row.style.opacity = "0";
-          setTimeout(() => row.remove(), 200);
-        }
-      });
-    });
-    rowStars.addEventListener("mousemove", (e) => {
-      const starEl = e.target.closest("span[data-star]");
-      if (!starEl) return;
-      const hoverRating = Number(starEl.dataset.star);
-      rowStars.querySelectorAll("span").forEach((s) => s.classList.toggle("filled", Number(s.dataset.star) <= hoverRating));
-    });
-    rowStars.addEventListener("mouseleave", () => {
-      rowStars.querySelectorAll("span").forEach((s) => s.classList.toggle("filled", Number(s.dataset.star) <= (t.rating || 0)));
-    });
-    if (showAdd) {
-      row.querySelector(".col-add").addEventListener("click", (e) => {
-        e.stopPropagation();
-        openAddToPlaylistModal([t.id]);
-      });
-    }
-    row.querySelector(".col-lookup").addEventListener("click", (e) => {
-      e.stopPropagation();
-      lookupTrackTags(t, row, e.currentTarget);
-    });
-    row.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      showTrackContextMenu(e, t, row);
-    });
-    container.appendChild(row);
+    container.appendChild(buildTrackRow(t, baseIdx + i + 1, { showAdd, contextList: list }));
   });
+}
+
+// ----------------------------------------------- windowed library list --
+// A big library used to put every row it had ever loaded into the page --
+// scroll through 21,000 tracks and that's 21,000 rows (a dozen elements and
+// an image request each). Now only the rows near the viewport exist; the
+// space the rest would take is padding on the list element, so scrollbars,
+// scroll position and "load more" all behave exactly as before. Every row
+// has one fixed height (set in CSS) which is what makes the arithmetic
+// below exact; it's measured rather than hard-coded, so a layout that
+// changes it only needs to call invalidateRowHeight().
+const vwin = { rowH: 0, first: 0, last: -1, nodes: [], raf: 0, overscan: 12 };
+
+function libraryHost() { return el("track-list"); }
+
+function resetLibraryWindow() {
+  const host = libraryHost();
+  host.innerHTML = "";
+  host.style.paddingTop = "0px";
+  host.style.paddingBottom = "0px";
+  vwin.first = 0;
+  vwin.last = -1;
+  vwin.nodes = [];
+}
+
+function invalidateRowHeight() {
+  vwin.rowH = 0;
+  if (state.libraryRows && state.libraryRows.length) {
+    vwin.first = 0;
+    vwin.last = -1;
+    vwin.nodes = [];
+    libraryHost().innerHTML = "";
+    renderLibraryWindow(true);
+  }
+}
+
+function libraryRowOptions() {
+  return { showAdd: true, contextList: state.libraryRows };
+}
+
+function renderLibraryWindow(force = false) {
+  const host = libraryHost();
+  const rows = state.libraryRows;
+  if (!rows || !rows.length || el("library-view").classList.contains("hidden")) return;
+
+  if (!vwin.rowH) {
+    // First render (or after a layout change): put one real row in to
+    // measure what a row actually is in the current layout/theme.
+    host.innerHTML = "";
+    const probe = buildTrackRow(rows[0], 1, libraryRowOptions());
+    host.appendChild(probe);
+    vwin.rowH = probe.getBoundingClientRect().height || 44;
+    host.innerHTML = "";
+    vwin.first = 0;
+    vwin.last = -1;
+    vwin.nodes = [];
+  }
+
+  const scroller = el("main-scroll");
+  const listTop = host.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+  const rowH = vwin.rowH;
+  let from = Math.floor((scroller.scrollTop - listTop) / rowH) - vwin.overscan;
+  let to = Math.ceil((scroller.scrollTop + scroller.clientHeight - listTop) / rowH) + vwin.overscan;
+  from = Math.max(0, Math.min(from, rows.length - 1));
+  to = Math.max(from, Math.min(to, rows.length - 1));
+  if (!force && from === vwin.first && to === vwin.last && vwin.nodes.length === to - from + 1) return;
+
+  const build = (i) => buildTrackRow(rows[i], i + 1, libraryRowOptions());
+  const overlaps = vwin.nodes.length && !force && from <= vwin.last && to >= vwin.first;
+  if (!overlaps) {
+    host.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    vwin.nodes = [];
+    for (let i = from; i <= to; i++) {
+      const node = build(i);
+      vwin.nodes.push(node);
+      frag.appendChild(node);
+    }
+    host.appendChild(frag);
+  } else {
+    while (vwin.first < from && vwin.nodes.length) { vwin.nodes.shift().remove(); vwin.first++; }
+    while (vwin.last > to && vwin.nodes.length) { vwin.nodes.pop().remove(); vwin.last--; }
+    for (let i = vwin.first - 1; i >= from; i--) {
+      const node = build(i);
+      vwin.nodes.unshift(node);
+      host.insertBefore(node, host.firstChild);
+    }
+    for (let i = vwin.last + 1; i <= to; i++) {
+      const node = build(i);
+      vwin.nodes.push(node);
+      host.appendChild(node);
+    }
+  }
+  vwin.first = from;
+  vwin.last = to;
+  host.style.paddingTop = `${from * rowH}px`;
+  host.style.paddingBottom = `${(rows.length - 1 - to) * rowH}px`;
+}
+
+function scheduleLibraryWindow() {
+  if (vwin.raf) return;
+  vwin.raf = requestAnimationFrame(() => {
+    vwin.raf = 0;
+    renderLibraryWindow();
+  });
+}
+window.addEventListener("resize", scheduleLibraryWindow);
+
+// Brings a track in the main list into view even if its row doesn't exist
+// in the page right now (it's windowed away).
+function scrollLibraryToTrack(trackId, { center = true } = {}) {
+  const idx = state.libraryRows.findIndex((t) => t.id === trackId);
+  if (idx < 0 || !vwin.rowH) return false;
+  const scroller = el("main-scroll");
+  const hostTop = libraryHost().getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+  const target = hostTop + idx * vwin.rowH - (center ? scroller.clientHeight / 2 : 0);
+  scroller.scrollTop = Math.max(0, target);
+  renderLibraryWindow();
+  return true;
+}
+
+// A row removed from view (e.g. it no longer matches the rating filter after
+// being re-rated) has to leave the data too, or windowing would just bring
+// it back the next time it scrolls into range.
+function removeTrackRow(trackId, row) {
+  if (row.parentElement === libraryHost()) {
+    const i = state.libraryRows.findIndex((t) => t.id === trackId);
+    if (i >= 0) {
+      state.libraryRows.splice(i, 1);
+      state.total = Math.max(0, state.total - 1);
+      state.offset = Math.max(0, state.offset - 1);
+      updateStatsBadge();
+      renderLibraryWindow(true);
+      return;
+    }
+  }
+  row.remove();
 }
 
 // -------------------------------------------------------- context menu --
@@ -495,14 +656,7 @@ el("select-all-filtered").addEventListener("click", async () => {
   try {
     const data = await api(`/track-ids?${trackQueryParams()}`);
     data.ids.forEach((id) => state.selected.add(id));
-    document.querySelectorAll("#track-list .track-row").forEach((row, i) => {
-      const t = state.currentList[i];
-      if (t && state.selected.has(t.id)) {
-        row.classList.add("selected");
-        const cb = row.querySelector(".col-check input");
-        if (cb) cb.checked = true;
-      }
-    });
+    renderLibraryWindow(true);  // rows are built from state.selected, so a re-render picks up every newly selected one
     updateSelectionToolbar();
   } finally {
     setTileText(btn, original);
@@ -621,12 +775,11 @@ function playTrack(track, contextList, opts) {
 }
 
 function refreshPlayingHighlight() {
-  document.querySelectorAll(".track-row").forEach((row) => row.classList.remove("playing"));
-  const visibleContainer = el("playlist-view").classList.contains("hidden") ? el("track-list") : el("playlist-tracks");
-  const idx = state.currentList.findIndex((t) => state.currentTrack && t.id === state.currentTrack.id);
-  if (idx >= 0 && visibleContainer.children[idx]) {
-    visibleContainer.children[idx].classList.add("playing");
-  }
+  document.querySelectorAll(".track-row.playing").forEach((row) => row.classList.remove("playing"));
+  if (!state.currentTrack) return;
+  // By id, not by position: the main list is windowed, so a row's place in
+  // the DOM no longer matches its place in the data.
+  document.querySelectorAll(`.track-row[data-id="${state.currentTrack.id}"]`).forEach((row) => row.classList.add("playing"));
 }
 
 function togglePlayPause() {
@@ -874,6 +1027,7 @@ function applyLayoutMode(name) {
   document.body.dataset.layout = name;
   document.body.classList.remove("filters-open");
   el("layout-select").value = name;
+  invalidateRowHeight();  // each layout has its own row height
   if (name === "grouped-ribbon") setUpGroupedRibbonAccordion();
 }
 
@@ -1824,7 +1978,7 @@ async function rateCurrentTrack(rating) {
   if (playingRow && violatesFilter) {
     playingRow.style.transition = "opacity .2s ease";
     playingRow.style.opacity = "0";
-    setTimeout(() => playingRow.remove(), 200);
+    setTimeout(() => removeTrackRow(t.id, playingRow), 200);
   }
 }
 el("stars").addEventListener("click", (e) => {
@@ -4365,6 +4519,8 @@ el("lyrics-backdrop").addEventListener("click", (e) => { if (e.target.id === "ly
 // now-playing panel's own art.
 async function fetchArtForTrack(trackId) {
   await api(`/art/${trackId}/fetch`, { method: "POST" });
+  const known = state.currentList.find((t) => t.id === trackId);
+  if (known) known.has_art = 1;
   const freshUrl = `${artUrl(trackId, true)}&t=${Date.now()}`;
   // Not scoped to #track-list -- the same row markup (and this same fetch
   // path, via the right-click menu) also appears inside #playlist-tracks.

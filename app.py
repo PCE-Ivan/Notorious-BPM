@@ -217,6 +217,29 @@ def get_db():
     return g.db
 
 
+def _ensure_schema():
+    """The app-level columns/tables (has_art, has_artist_tag, trash, ...) are
+    added lazily by the first get_db() -- fine once a page has loaded, but a
+    brand-new library can have a background job (a scan's chained thumbnail
+    pass, a deep scan) start before any request has touched it, and those
+    use their own connections. Called as every job starts, so the jobs never
+    see a half-built schema."""
+    global _schema_ready
+    if _schema_ready:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        _ensure_deep_scan_columns(conn)
+    finally:
+        conn.close()
+    _schema_ready = True
+
+
+def _prepare_job():
+    _ensure_schema()
+    close_db(None)
+
+
 def _snapshot_db():
     """Copies the whole library.db before a bulk destructive action, keeping
     the last 5 snapshots. Cheap (it's one file) and turns "the auto-clean
@@ -262,7 +285,7 @@ def track_to_dict(row, rating=None):
 
 TRACK_FIELDS = (
     "t.id, t.artist, t.album, t.title, t.genre, t.primary_genre, t.year, "
-    "t.decade, t.bpm, t.duration, t.ext, t.language, r.rating as rating"
+    "t.decade, t.bpm, t.duration, t.ext, t.language, t.has_art, r.rating as rating"
 )
 
 PLAYLIST_NAME_MAX_LEN = 200
@@ -288,6 +311,21 @@ SMART_PLAYLIST_NAME_MAX_LEN = 200
 # ever called after the whole module has loaded) is every one of this
 # file's 13 job-state dicts' "running" flag.
 _library_lock = threading.Lock()
+
+
+# Quiet housekeeping the user never asked for by name -- it should never be
+# the reason a library switch is refused. A switch stops these (briefly
+# waiting for them to notice) and only refuses for work the user started.
+_HOUSEKEEPING_JOBS = ("art_warm", "health_check")
+
+
+def _stop_housekeeping_jobs(wait=5.0):
+    stopping = [j for n, j in jobs.REGISTRY.items() if n in _HOUSEKEEPING_JOBS and j.running]
+    for j in stopping:
+        j.cancel()
+    end = time.time() + wait
+    while time.time() < end and any(j.running for j in stopping):
+        time.sleep(0.05)
 
 
 def _any_background_job_running():
@@ -499,7 +537,7 @@ def history_list():
 @app.route("/api/history/<int:op_id>/undo", methods=["POST"])
 def history_undo(op_id):
     if not _undo_job.start(
-        _run_undo_bg, op_id, guard=_library_lock, prepare=lambda: (_snapshot_db(), close_db(None)),
+        _run_undo_bg, op_id, guard=_library_lock, prepare=lambda: (_snapshot_db(), _prepare_job()),
     ):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
@@ -541,13 +579,14 @@ def _run_scan_bg(force_prune=False):
         jukebox_config.update_config(lambda cfg: cfg.__setitem__("last_scan_at", datetime.datetime.utcnow().isoformat()))
     finally:
         _invalidate_dup_plan_cache()
+    _start_art_warm()  # only reached on a clean finish: a cancel/failure propagates past the finally
 
 
 def _start_scan_bg(force_prune=False):
     """Returns False (and starts nothing) if a scan is already running --
     same "already running" convention as fill-genres/fill-years, not an
     error, just something the caller can tell the user."""
-    return _scan_job.start(_run_scan_bg, force_prune, guard=_library_lock, prepare=lambda: close_db(None))
+    return _scan_job.start(_run_scan_bg, force_prune, guard=_library_lock, prepare=_prepare_job)
 
 
 @app.route("/api/rescan", methods=["POST"])
@@ -1043,7 +1082,7 @@ def _run_organize_bg():
 
 
 def _start_organize_bg():
-    return _organize_job.start(_run_organize_bg, guard=_library_lock, prepare=lambda: close_db(None))
+    return _organize_job.start(_run_organize_bg, guard=_library_lock, prepare=_prepare_job)
 
 
 @app.route("/api/organize-by-artist", methods=["POST"])
@@ -1081,7 +1120,7 @@ def fill_genres_route():
     # 200 either way (not a 409) -- "already running" is an expected,
     # normal outcome for the frontend to branch on, not a request failure,
     # and the shared api() helper throws on any non-2xx response.
-    if not _fill_genres_job.start(_run_fill_genres_bg, guard=_library_lock, prepare=lambda: close_db(None)):
+    if not _fill_genres_job.start(_run_fill_genres_bg, guard=_library_lock, prepare=_prepare_job):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
@@ -1114,7 +1153,7 @@ def fill_years_route():
         return blocked
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
-    if not _fill_years_job.start(_run_fill_years_bg, track_ids, guard=_library_lock, prepare=lambda: close_db(None)):
+    if not _fill_years_job.start(_run_fill_years_bg, track_ids, guard=_library_lock, prepare=_prepare_job):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
@@ -1170,7 +1209,7 @@ def fill_art_route():
     the whole library."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
-    if not _fill_art_job.start(_run_fill_art_bg, track_ids, guard=_library_lock, prepare=lambda: close_db(None)):
+    if not _fill_art_job.start(_run_fill_art_bg, track_ids, guard=_library_lock, prepare=_prepare_job):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
@@ -1211,7 +1250,7 @@ def unify_artist_genre_route():
         return blocked
     if not _unify_genre_job.start(
         _run_unify_genre_bg, guard=_library_lock,
-        prepare=lambda: (_snapshot_db(), close_db(None)),
+        prepare=lambda: (_snapshot_db(), _prepare_job()),
     ):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
@@ -1254,7 +1293,7 @@ def fix_artist_title_route():
         return blocked
     if not _fix_artist_title_job.start(
         _run_fix_artist_title_bg, guard=_library_lock,
-        prepare=lambda: (_snapshot_db(), close_db(None)),
+        prepare=lambda: (_snapshot_db(), _prepare_job()),
     ):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
@@ -1332,7 +1371,7 @@ def verify_audio_route():
     everything, accepting that cost."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
-    if not _verify_audio_job.start(_run_verify_audio_bg, track_ids, guard=_library_lock, prepare=lambda: close_db(None)):
+    if not _verify_audio_job.start(_run_verify_audio_bg, track_ids, guard=_library_lock, prepare=_prepare_job):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
@@ -1622,7 +1661,7 @@ def tags_deep_scan():
     db = get_db()
     rows = [dict(r) for r in db.execute("SELECT id, path FROM tracks").fetchall()]
 
-    if not _deep_scan_job.start(_run_deep_scan_bg, rows, guard=_library_lock, prepare=lambda: close_db(None), total=len(rows)):
+    if not _deep_scan_job.start(_run_deep_scan_bg, rows, guard=_library_lock, prepare=_prepare_job, total=len(rows)):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True, "total": len(rows)})
 
@@ -1871,6 +1910,7 @@ def _switch_library(db_path, music_dir):
     file for why both directions matter."""
     global DB_PATH, MUSIC_DIR, ART_CACHE_DIR, TRASH_DIR, BACKUP_DIR, _schema_ready
     with _library_lock:
+        _stop_housekeeping_jobs()
         if _any_background_job_running():
             return {"ok": False, "error": "A background job is running — wait for it to finish, then try again."}
 
@@ -2146,7 +2186,7 @@ def _run_convert_bg(track_ids, fmt):
 def _start_convert(track_ids, fmt):
     started = _convert_job.start(
         _run_convert_bg, track_ids, fmt, guard=_library_lock,
-        prepare=lambda: close_db(None), total=len(track_ids),
+        prepare=_prepare_job, total=len(track_ids),
     )
     return len(track_ids) if started else None
 
@@ -2593,7 +2633,7 @@ def duplicates_auto_clean():
             "skipped_groups": skipped_groups,
         })
 
-    if not _dup_clean_job.start(_run_dup_clean_bg, to_delete, guard=_library_lock, prepare=lambda: close_db(None), total=len(to_delete)):
+    if not _dup_clean_job.start(_run_dup_clean_bg, to_delete, guard=_library_lock, prepare=_prepare_job, total=len(to_delete)):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True, "total": len(to_delete)})
 
@@ -2959,6 +2999,107 @@ def fetch_art(track_id):
     return jsonify({"ok": True, "track_id": track_id})
 
 
+# Cover-art thumbnails used to be built the first time each row scrolled into
+# view: every artless track in a freshly opened big library fired an image
+# request that hit the disk (embedded-art extraction, often on exFAT) only to
+# 404, and every track with art decoded + resized its cover mid-scroll. This
+# does that once, in the background, with a few worker threads -- afterwards
+# scrolling only ever serves ready-made files, and has_art is true to what's
+# actually there (so rows with no art can skip the request entirely).
+_art_warm_job = jobs.Job(
+    "art_warm", "Preparing cover-art thumbnails",
+    summarize=lambda s: "{m} ready, {n} without art".format(
+        m=(s["result"] or {}).get("with_art", 0), n=(s["result"] or {}).get("without_art", 0)),
+)
+_art_warm_state = _art_warm_job.state
+_ART_WARM_WORKERS = 4
+
+
+def _art_warm_todo(conn):
+    """Tracks with neither a ready thumbnail nor a recorded "no art" marker."""
+    done = set()
+    try:
+        for name in os.listdir(ART_CACHE_DIR):
+            m = health.ART_FILE_RE.match(name)
+            if m and (name.endswith(".thumb.jpg") or name.endswith(".none")):
+                done.add(int(m.group(1)))
+    except OSError:
+        pass
+    return [r for r in conn.execute("SELECT id, path, has_art FROM tracks").fetchall() if r["id"] not in done]
+
+
+def _run_art_warm_bg():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        todo = _art_warm_todo(conn)
+        total = len(todo)
+        _art_warm_job.set(total=total)
+
+        def work(row):
+            fpath = os.path.join(MUSIC_DIR, row["path"])
+            if not os.path.isfile(fpath):
+                return row["id"], None
+            data, _mime = get_art(row["id"], fpath, thumb=True)
+            return row["id"], bool(data)
+
+        with_art = without_art = 0
+        pending = []
+        pool = ThreadPoolExecutor(max_workers=_ART_WARM_WORKERS)
+        try:
+            for i, (track_id, has) in enumerate(pool.map(work, todo)):
+                if has is True:
+                    with_art += 1
+                elif has is False:
+                    without_art += 1
+                if has is not None:
+                    pending.append((1 if has else 0, track_id))
+                if len(pending) >= 200:
+                    conn.executemany("UPDATE tracks SET has_art=? WHERE id=?", pending)
+                    conn.commit()
+                    pending = []
+                _art_warm_job.progress(i + 1, total)
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            if pending:
+                conn.executemany("UPDATE tracks SET has_art=? WHERE id=?", pending)
+                conn.commit()
+            raise
+        pool.shutdown()
+        if pending:
+            conn.executemany("UPDATE tracks SET has_art=? WHERE id=?", pending)
+            conn.commit()
+        _art_warm_state["result"] = {"checked": total, "with_art": with_art, "without_art": without_art}
+    finally:
+        conn.close()
+
+
+def _start_art_warm():
+    return _art_warm_job.start(_run_art_warm_bg, guard=_library_lock, prepare=_ensure_schema)
+
+
+@app.route("/api/art/warm", methods=["POST"])
+def art_warm_route():
+    """Starts the thumbnail pass only if there's something to do (a cheap
+    directory listing + one query), so the front end can call this on every
+    launch without ever starting empty work."""
+    _ensure_schema()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        needed = len(_art_warm_todo(conn))
+    finally:
+        conn.close()
+    if not needed:
+        return jsonify({"started": False, "needed": 0})
+    return jsonify({"started": _start_art_warm(), "needed": needed})
+
+
+@app.route("/api/art/warm/progress")
+def art_warm_progress():
+    return jsonify(_art_warm_state)
+
+
 @app.route("/api/tracks/<int:track_id>/reveal", methods=["POST"])
 def reveal_track(track_id):
     """Reveals a track's file in Finder, selected -- macOS only (matches
@@ -3239,7 +3380,7 @@ def delete_tracks_route():
     rows = [dict(r) for r in db.execute(
         f"SELECT id, path, artist, title, album FROM tracks WHERE id IN ({placeholders})", track_ids
     ).fetchall()]
-    if not _delete_tracks_job.start(_run_delete_tracks_bg, rows, guard=_library_lock, prepare=lambda: close_db(None), total=len(rows)):
+    if not _delete_tracks_job.start(_run_delete_tracks_bg, rows, guard=_library_lock, prepare=_prepare_job, total=len(rows)):
         return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True, "total": len(rows)})
 

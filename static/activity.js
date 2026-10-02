@@ -38,11 +38,6 @@ async function checkSystemStatus() {
 // paused while the window is in the background.
 setInterval(() => { if (document.visibilityState === "visible") checkSystemStatus(); }, 20000);
 
-el("system-banner-fix").classList.toggle("hidden", problem.fix !== "open_privacy_settings");
-  banner.classList.remove("hidden");
-  return false;
-}
-
 el("system-banner-fix").addEventListener("click", () => {
   api("/system/open-privacy-settings", { method: "POST" }).catch(() => {});
 });
@@ -164,3 +159,8 @@ el("about-show-log").addEventListener("click", async () => {
 
 checkSystemStatus();
 refreshActivity();
+
+// Thumbnails: after the library has loaded, ask the server to prepare any
+// that are missing (it only starts work if there is some). Shows up in the
+// Activity tray; scrolling gets smoother as it finishes.
+setTimeout(() => { api("/art/warm", { method: "POST" }).catch(() => {}); }, 6000);
