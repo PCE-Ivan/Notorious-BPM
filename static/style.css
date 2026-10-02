@@ -2282,3 +2282,18 @@ body[data-theme="vinyl"] .col-art { border-radius: 50%; }
   width: 100%; margin-top: 10px; box-sizing: border-box; font: 11px/1.4 ui-monospace, Menlo, monospace;
   background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px;
 }
+
+/* ============================================================ library health == */
+.health-panel { max-width: 640px; }
+.health-issues { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; max-height: 50vh; overflow-y: auto; }
+.health-issue { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.health-issue-head { display: flex; align-items: center; gap: 8px; }
+.health-issue-title { flex: 1; font-weight: 600; font-size: 13px; }
+.health-issue-count { color: var(--text-dim); font-size: 12px; }
+.health-pill { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 8px; color: #fff; background: var(--text-dim); }
+.health-pill.critical { background: var(--danger); }
+.health-pill.warning { background: #b7791f; }
+.health-issue-detail { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+.health-issue-examples { margin: 6px 0 0; padding-left: 16px; font-size: 11.5px; color: var(--text-dim); }
+.health-issue-fix { margin-top: 8px; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.health-ok { padding: 14px; text-align: center; color: var(--text-dim); }

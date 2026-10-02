@@ -188,6 +188,7 @@ def scan(progress_cb=None, force_prune=False):
         raise RuntimeError(f"Music directory not set or not found: {MUSIC_DIR}")
 
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")  # a pruned track must take its ratings/playlist entries with it
     build_schema(conn)
     cur = conn.cursor()
 

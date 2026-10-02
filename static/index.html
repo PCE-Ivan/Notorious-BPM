@@ -249,6 +249,7 @@
         <button id="open-trash" class="btn-secondary">🗑 Trash</button>
         <button id="open-stats" class="btn-secondary">📊 Stats</button>
         <button id="open-export" class="btn-secondary">⇄ Backup</button>
+        <button id="open-health" class="btn-secondary" title="Check the library against the disk and caches">🩺 Health</button>
         <button id="open-help" class="btn-secondary">❓ Help</button>
         <button id="open-about" class="btn-secondary">ℹ️ About</button>
       </div>
@@ -1060,6 +1061,24 @@
   </div>
 </div>
 
+<div id="health-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel health-panel">
+    <div class="dup-panel-header">
+      <h3>Library health</h3>
+      <button id="health-close" class="btn-icon" title="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p id="health-summary" class="dup-summary-text">Checks the library against the files on disk, the cover-art cache and the Trash.</p>
+      <div id="health-progress" class="dup-progress hidden"><div id="health-progress-fill" class="dup-progress-fill"></div></div>
+      <div id="health-issues" class="health-issues"></div>
+      <div class="modal-actions">
+        <button id="health-run" class="btn-secondary">Check again</button>
+        <button id="health-repair" class="btn-primary" disabled>Repair selected</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="about-backdrop" class="modal-backdrop hidden">
   <div class="dup-panel">
     <div class="dup-panel-header">
@@ -1184,5 +1203,6 @@
 
 <script src="app.js"></script>
 <script src="activity.js"></script>
+<script src="health.js"></script>
 </body>
 </html>

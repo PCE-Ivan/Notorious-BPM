@@ -20,6 +20,34 @@ echo "== Building app bundle with PyInstaller =="
 rm -rf dist-macos-new build-macos-new
 /usr/bin/python3 -m PyInstaller jukebox_macos.spec --distpath dist-macos-new --workpath build-macos-new --noconfirm
 
+echo "== Signing =="
+# Why this step exists: PyInstaller leaves the app ad-hoc signed, and an ad-hoc
+# signature's identity is a hash of the binary -- different on every build. macOS
+# files "this app may read your Desktop/Documents/external drives" grants against
+# that identity, so every rebuild looked like a brand-new app and every library
+# on a protected folder went unreadable until the grant was clicked again.
+# Two ways out, best first:
+#   1. A real signing identity ($SIGN_IDENTITY, or the "Notorious BPM Local
+#      Signing" certificate that ./setup_signing.sh creates once): the identity
+#      then is the certificate, constant across builds.
+#   2. No certificate: stay ad-hoc but pin the signature's designated
+#      requirement to the bundle identifier, so the identity stops depending on
+#      the binary's contents.
+BUNDLE_ID="local.ivan.notorious-bpm"
+IDENTITY="${SIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ] && security find-identity -p codesigning 2>/dev/null | grep -q "Notorious BPM Local Signing"; then
+  IDENTITY="Notorious BPM Local Signing"
+fi
+if [ -n "$IDENTITY" ]; then
+  echo "Signing with identity: $IDENTITY"
+  codesign --force --deep --sign "$IDENTITY" "dist-macos-new/$APP_NAME"
+else
+  echo "No signing identity found -- ad-hoc signing with a pinned requirement (run ./setup_signing.sh for a certificate)."
+  codesign --force --sign - --requirements "=designated => identifier \"$BUNDLE_ID\"" "dist-macos-new/$APP_NAME"
+fi
+codesign --verify --deep --strict "dist-macos-new/$APP_NAME"
+codesign -d -r- "dist-macos-new/$APP_NAME" 2>&1 | grep designated
+
 echo "== Installing to /Applications =="
 pkill -9 -f "Notorious BPM" 2>/dev/null || true
 sleep 1

@@ -105,5 +105,14 @@ app = BUNDLE(
         # easy to miss.
         "NSLocalNetworkUsageDescription": "Notorious B.P.M. uses your local network to find AirPlay speakers and Apple TVs to stream music to.",
         "NSBonjourServices": ["_airplay._tcp", "_raop._tcp"],
+        # Libraries and music routinely live in protected places (Desktop,
+        # Documents, external/network volumes). Without a purpose string for
+        # each, macOS has nothing to show in its permission prompt and the
+        # access can end up silently denied instead of asked about.
+        "NSDesktopFolderUsageDescription": "Notorious B.P.M. reads your music library and music files when they are stored on your Desktop.",
+        "NSDocumentsFolderUsageDescription": "Notorious B.P.M. reads your music library and music files when they are stored in Documents.",
+        "NSDownloadsFolderUsageDescription": "Notorious B.P.M. reads music files you keep in Downloads.",
+        "NSRemovableVolumesUsageDescription": "Notorious B.P.M. reads your music library and music files stored on external drives.",
+        "NSNetworkVolumesUsageDescription": "Notorious B.P.M. reads your music library and music files stored on network drives.",
     },
 )

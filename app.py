@@ -23,6 +23,7 @@ import urllib.request
 from flask import Flask, g, jsonify, request, send_file, abort, send_from_directory, make_response, Response
 
 import config as jukebox_config
+import health
 import jobs
 import logging
 import logging_setup
@@ -381,6 +382,75 @@ def diagnostics():
     }
     lines = [f"{k}: {v}" for k, v in info.items()]
     return jsonify({"info": info, "text": "\n".join(lines) + "\n\n--- recent log ---\n" + logging_setup.tail(20000)})
+
+
+# ------------------------------------------------------------ library health --
+_health_job = jobs.Job(
+    "health_check", "Checking library health",
+    summarize=lambda s: ("no problems found" if (s["result"] or {}).get("healthy") else
+                         "{n} thing(s) to review".format(n=len((s["result"] or {}).get("issues", [])))),
+)
+_health_state = _health_job.state
+_HEALTH_REPAIRS = {
+    "remove_missing_tracks", "delete_orphan_art", "clear_stale_none", "reset_art_flags",
+    "set_art_flags", "delete_dangling_trash", "delete_dangling_links", "migrate_stray_dirs",
+}
+
+
+def _embedded_art_present(path):
+    # A file we can't open is treated as "has art" -- the health check must
+    # never turn an unreadable file into a claim about its contents.
+    return _read_raw_tag_presence(path)[2] if os.path.isfile(path) else True
+
+
+def _run_health_bg():
+    report = health.run_checks(
+        DB_PATH, MUSIC_DIR, ART_CACHE_DIR, TRASH_DIR, BACKUP_DIR,
+        stray_dir=os.path.dirname(DB_PATH), correct_dir=library_manager.companion_dir(DB_PATH),
+        has_embedded_art=_embedded_art_present, progress=_health_job.progress,
+    )
+    _health_state["result"] = report
+    jukebox_config.update_config(lambda cfg: cfg.__setitem__("last_health_check_at", time.time()))
+
+
+@app.route("/api/health/check", methods=["POST"])
+def health_check_route():
+    if not _health_job.start(_run_health_bg, guard=_library_lock):
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True})
+
+
+@app.route("/api/health/progress")
+def health_progress():
+    return jsonify(_health_state)
+
+
+@app.route("/api/health/last")
+def health_last():
+    return jsonify({
+        "result": _health_state.get("result"),
+        "last_check_at": jukebox_config.load_config().get("last_health_check_at"),
+    })
+
+
+@app.route("/api/health/repair", methods=["POST"])
+def health_repair_route():
+    data = request.get_json(force=True, silent=True) or {}
+    repairs = [r for r in (data.get("repairs") or []) if r in _HEALTH_REPAIRS]
+    if not repairs:
+        return jsonify({"ok": False, "error": "Nothing selected to repair."})
+    if _any_background_job_running():
+        return jsonify({"ok": False, "error": "A background task is running — wait for it to finish, then try again."})
+    with _library_lock:
+        _snapshot_db()
+        close_db(None)
+        results = health.repair(
+            repairs, DB_PATH, MUSIC_DIR, ART_CACHE_DIR, TRASH_DIR,
+            has_embedded_art=_embedded_art_present,
+            migrate_stray=lambda: library_manager.migrate_stray_companion_dir(DB_PATH),
+        )
+    log.info("Health repair applied: %s", results)
+    return jsonify({"ok": True, "results": results})
 
 
 # Shared by /api/rescan and /api/choose-folder -- both ultimately just run
@@ -2424,6 +2494,7 @@ def _run_dup_clean_bg(rows):
         # this runs on a background thread with no request context.
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")  # so deleted tracks take their ratings/playlist entries with them
         try:
             deleted, errors = _delete_track_rows(conn, rows, progress_cb=progress_cb)
             _dup_clean_state["deleted"] = deleted
@@ -3073,6 +3144,7 @@ def _run_delete_tracks_bg(rows):
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")  # so deleted tracks take their ratings/playlist entries with them
         try:
             deleted, errors = _delete_track_rows(conn, rows, progress_cb=progress_cb)
             _delete_tracks_state["deleted"] = deleted

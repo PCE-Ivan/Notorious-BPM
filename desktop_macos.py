@@ -196,6 +196,29 @@ class JsApi:
         return {"ok": True}
 
 
+def _touch_protected_locations(jukebox_app):
+    """Reads the library file and music folder once, here on the main thread
+    before any window exists. macOS raises its "allow access to your
+    Desktop / external drive?" prompt at the first read of a protected
+    location -- doing that first read from the server's worker threads (as
+    the first library query otherwise would) is how the prompt got missed
+    and the access silently denied. Failure is fine and expected when
+    access isn't granted yet: the UI's own status check explains it."""
+    import logging
+    log = logging.getLogger("jukebox.startup")
+    for path, is_dir in ((jukebox_app.DB_PATH, False), (jukebox_app.MUSIC_DIR, True)):
+        if not path:
+            continue
+        try:
+            if is_dir:
+                os.listdir(path)
+            else:
+                with open(path, "rb") as f:
+                    f.read(16)
+        except OSError as e:
+            log.warning("Startup access probe could not read %s: %s", path, e)
+
+
 def main():
     if not _server_already_up():
         music_dir = jukebox_config.get_music_dir()
@@ -208,6 +231,7 @@ def main():
 
         os.environ.setdefault("JUKEBOX_STATIC_DIR", os.path.join(_bundled_base_dir(), "static"))
         import app as jukebox_app
+        _touch_protected_locations(jukebox_app)
         server_thread = threading.Thread(
             target=lambda: jukebox_app.app.run(host="127.0.0.1", port=PORT, threaded=True, use_reloader=False),
             daemon=True,

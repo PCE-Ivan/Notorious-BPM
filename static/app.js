@@ -780,6 +780,7 @@ const SEARCH_COMMANDS = [
   { cmd: "trash", label: "Trash", btn: "open-trash", group: "System" },
   { cmd: "backup", label: "Backup library", btn: "open-export", group: "System" },
   { cmd: "stats", label: "Library stats", btn: "open-stats", group: "System" },
+  { cmd: "health", label: "Library health check", btn: "open-health", group: "System" },
 ];
 
 function runSearchCommand(command) {
