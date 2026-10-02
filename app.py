@@ -318,7 +318,7 @@ _library_lock = threading.Lock()
 # Quiet housekeeping the user never asked for by name -- it should never be
 # the reason a library switch is refused. A switch stops these (briefly
 # waiting for them to notice) and only refuses for work the user started.
-_HOUSEKEEPING_JOBS = ("art_warm", "health_check", "audio_dupes")
+_HOUSEKEEPING_JOBS = ("art_warm", "health_check", "audio_dupes", "verify_audio")
 
 
 def _stop_housekeeping_jobs(wait=5.0):
@@ -1318,7 +1318,14 @@ _verify_audio_job = jobs.Job("verify_audio", "Verifying tags against audio")
 _verify_audio_state = _verify_audio_job.state
 
 
+_VERIFY_MAX_CONSECUTIVE_ERRORS = 8
+
+
 def _run_verify_audio_bg(track_ids):
+    """track_ids given -> exactly those, re-checked. None -> the whole
+    library, but only tracks with no recorded result yet (or a recorded
+    error), so a stopped run -- or one interrupted by a quit or a crash --
+    picks up where it left off instead of starting over."""
     progress_cb = _verify_audio_job.progress
 
     fpcalc_path = _find_binary("fpcalc")
@@ -1330,47 +1337,79 @@ def _run_verify_audio_bg(track_ids):
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
+        audio_dupes.ensure_tables(conn)
         if track_ids:
             placeholders = ",".join("?" * len(track_ids))
             rows = conn.execute(
                 f"SELECT id, path, artist, title FROM tracks WHERE id IN ({placeholders})", track_ids,
             ).fetchall()
         else:
-            rows = conn.execute("SELECT id, path, artist, title FROM tracks").fetchall()
+            rows = conn.execute(
+                "SELECT t.id, t.path, t.artist, t.title FROM tracks t "
+                "LEFT JOIN audio_verified v ON v.track_id = t.id WHERE v.track_id IS NULL OR v.status = 'error' "
+                "ORDER BY t.id"
+            ).fetchall()
+
+        total = len(rows)
+        _verify_audio_job.set(total=total)
+        mismatches = []
+        checked = errors = consecutive_errors = 0
+        unsaved = 0
+
+        def record(track_id, status, found_artist=None, found_title=None, score=None):
+            nonlocal unsaved
+            conn.execute(
+                "INSERT OR REPLACE INTO audio_verified (track_id, checked_at, status, found_artist, found_title, score, dismissed) "
+                "VALUES (?,?,?,?,?,?,0)", (track_id, time.time(), status, found_artist, found_title, score))
+            unsaved += 1
+            if unsaved >= 20:
+                conn.commit()
+                unsaved = 0
+
+        try:
+            for i, row in enumerate(rows):
+                fpath = os.path.join(MUSIC_DIR, row["path"])
+                if os.path.isfile(fpath):
+                    try:
+                        found_artist, found_title, score = _fingerprint_lookup(fpath, api_key, fpcalc_path)
+                        checked += 1
+                        consecutive_errors = 0
+                        if found_title is None:
+                            record(row["id"], "nomatch")
+                        elif _tags_look_mismatched(row["artist"], row["title"], found_artist, found_title):
+                            record(row["id"], "mismatch", found_artist, found_title, score)
+                            mismatches.append({
+                                "id": row["id"], "score": score,
+                                "current_artist": row["artist"], "current_title": row["title"],
+                                "found_artist": found_artist, "found_title": found_title,
+                            })
+                        else:
+                            record(row["id"], "ok", found_artist, found_title, score)
+                    except Exception as e:
+                        errors += 1
+                        consecutive_errors += 1
+                        record(row["id"], "error")
+                        log.info("Audio verify failed for track %s: %s", row["id"], e)
+                        if consecutive_errors >= _VERIFY_MAX_CONSECUTIVE_ERRORS:
+                            raise RuntimeError(
+                                "AcoustID isn't answering — check your internet connection, then run it again "
+                                "(what's done so far is kept).")
+                progress_cb(i + 1, total)
+                time.sleep(0.35)  # AcoustID asks for at most ~3 requests/second per API key
+        finally:
+            conn.commit()
+        _verify_audio_state["result"] = {"checked": checked, "errors": errors, "mismatches": mismatches}
     finally:
         conn.close()
-
-    total = len(rows)
-    mismatches = []
-    checked = 0
-    errors = 0
-    for i, row in enumerate(rows):
-        fpath = os.path.join(MUSIC_DIR, row["path"])
-        if os.path.isfile(fpath):
-            try:
-                found_artist, found_title, score = _fingerprint_lookup(fpath, api_key, fpcalc_path)
-                checked += 1
-                if found_title is not None and _tags_look_mismatched(row["artist"], row["title"], found_artist, found_title):
-                    mismatches.append({
-                        "id": row["id"], "score": score,
-                        "current_artist": row["artist"], "current_title": row["title"],
-                        "found_artist": found_artist, "found_title": found_title,
-                    })
-            except Exception:
-                errors += 1
-        progress_cb(i + 1, total)
-        time.sleep(0.35)  # AcoustID asks for at most ~3 requests/second per API key
-    _verify_audio_state["result"] = {"checked": checked, "errors": errors, "mismatches": mismatches}
 
 
 @app.route("/api/verify-audio", methods=["POST"])
 def verify_audio_route():
-    """Pass {"track_ids": [...]} to scope it (the selection toolbar always
-    does -- fingerprinting is real per-track work, both decoding audio and
-    an AcoustID round trip, so this is opt-in on a selection rather than
-    silently defaulting to the whole library); omit it to run across
-    everything, accepting that cost."""
+    """Pass {"track_ids": [...]} to check just those (the selection toolbar);
+    omit it for the whole library -- resumable: only tracks not yet checked
+    are listened to, so it can be stopped and continued across days."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
     if not _verify_audio_job.start(_run_verify_audio_bg, track_ids, guard=_library_lock, prepare=_prepare_job):
@@ -1381,6 +1420,50 @@ def verify_audio_route():
 @app.route("/api/verify-audio/progress")
 def verify_audio_progress():
     return jsonify(_verify_audio_state)
+
+
+@app.route("/api/verify-audio/status")
+def verify_audio_status():
+    db = get_db()
+    total = db.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    verified = db.execute("SELECT COUNT(*) FROM audio_verified WHERE status != 'error'").fetchone()[0]
+    return jsonify({
+        "total": total, "verified": verified,
+        "mismatches": len(_verify_audio_open_mismatches(db)),
+        "fpcalc": bool(_find_binary("fpcalc")),
+        "api_key": bool((jukebox_config.load_config().get("acoustidApiKey") or "").strip()),
+    })
+
+
+def _verify_audio_open_mismatches(db):
+    """Mismatches from any earlier run that are still real (the tags haven't
+    since been fixed) and haven't been dismissed."""
+    rows = db.execute(
+        "SELECT t.id, t.artist, t.title, v.found_artist, v.found_title, v.score FROM audio_verified v "
+        "JOIN tracks t ON t.id = v.track_id WHERE v.status = 'mismatch' AND v.dismissed = 0 "
+        "ORDER BY t.artist COLLATE NOCASE, t.title COLLATE NOCASE").fetchall()
+    return [{
+        "id": r["id"], "score": r["score"],
+        "current_artist": r["artist"], "current_title": r["title"],
+        "found_artist": r["found_artist"], "found_title": r["found_title"],
+    } for r in rows if _tags_look_mismatched(r["artist"], r["title"], r["found_artist"], r["found_title"])]
+
+
+@app.route("/api/verify-audio/results")
+def verify_audio_results():
+    return jsonify({"mismatches": _verify_audio_open_mismatches(get_db())})
+
+
+@app.route("/api/verify-audio/dismiss", methods=["POST"])
+def verify_audio_dismiss():
+    data = request.get_json(force=True, silent=True) or {}
+    track_id = data.get("track_id")
+    if not isinstance(track_id, int):
+        return jsonify({"ok": False, "error": "track_id required"}), 400
+    db = get_db()
+    db.execute("UPDATE audio_verified SET dismissed = 1 WHERE track_id = ?", (track_id,))
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/tracks/<int:track_id>/lookup-tags", methods=["POST"])

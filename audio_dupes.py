@@ -109,6 +109,20 @@ def ensure_tables(conn):
             created_at REAL NOT NULL
         )
     """)
+    # Results of the AcoustID "does this audio match its tags?" check, so a
+    # whole-library run can stop and resume (or survive a restart) and a
+    # dismissed mismatch stays dismissed.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS audio_verified (
+            track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+            checked_at REAL NOT NULL,
+            status TEXT NOT NULL,
+            found_artist TEXT,
+            found_title TEXT,
+            score REAL,
+            dismissed INTEGER NOT NULL DEFAULT 0
+        )
+    """)
     # "These aren't duplicates" answers, so a reviewed group never comes
     # back. Keyed by the sorted track ids, not by title, so it survives tag
     # edits but not a deleted/replaced file.

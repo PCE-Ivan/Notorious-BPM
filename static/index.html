@@ -826,12 +826,19 @@
           and account as Live Radio's song-ID feature, so it needs that same free AcoustID
           API key and <code>fpcalc</code> installed) and reports anything that doesn't match,
           for you to review — it never changes a tag on its own. Real per-track work (decode
-          + a lookup each), so this runs against your current selection rather than the whole
-          library — select some tracks first, then come back here.
+          + a lookup each, a little under a second per track), so run it on a selection, or on
+          the whole library and let it work in the background. The whole-library run keeps
+          its place: stop it any time (or quit the app) and the next run listens only to
+          what's left.
         </p>
       </div>
-      <button id="verify-audio-bulk-btn" class="btn-secondary">Verify selected tracks</button>
+      <div class="verify-audio-actions">
+        <button id="verify-audio-bulk-btn" class="btn-secondary">Verify selected tracks</button>
+        <button id="verify-audio-all-btn" class="btn-secondary">Verify whole library</button>
+        <button id="verify-audio-cancel" class="btn-small hidden">Stop</button>
+      </div>
       <div id="verify-audio-bulk-progress" class="dup-progress hidden"><div id="verify-audio-bulk-progress-fill" class="dup-progress-fill"></div></div>
+      <div id="verify-audio-status-line" class="dup-summary-note"></div>
       <div id="verify-audio-bulk-result" class="dup-summary-note"></div>
       <div id="verify-audio-mismatches" class="tag-issue-list"></div>
     </div>

@@ -3369,6 +3369,9 @@ async function runDeepScan() {
 el("open-tag-checker").addEventListener("click", () => {
   el("tags-backdrop").classList.remove("hidden");
   scanTags();
+  refreshVerifyAudioStatus(true);
+  // A whole-library run keeps going after this panel is closed -- reattach to it.
+  api("/verify-audio/progress").then((s) => { if (s.running && !verifyAudioFollowing) runVerifyAudio(null); }).catch(() => {});
 });
 el("tags-scan-btn").addEventListener("click", scanTags);
 el("tags-deepscan-btn").addEventListener("click", runDeepScan);
@@ -3562,65 +3565,109 @@ function renderAudioMismatchRow(m) {
       showToast("Couldn't apply that fix.", { kind: "error" });
     }
   });
-  dismissBtn.addEventListener("click", () => row.remove());
+  dismissBtn.addEventListener("click", () => {
+    row.remove();
+    api("/verify-audio/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track_id: m.id }),
+    }).catch(() => {});
+  });
   return row;
 }
 
-el("verify-audio-bulk-btn").addEventListener("click", async () => {
-  const ids = Array.from(state.selected);
-  const btn = el("verify-audio-bulk-btn");
-  const original = btn.textContent;
+// Shows "N of M verified" and any mismatches from earlier runs (they're kept in
+// the library, so a long run's findings are still here the next day).
+async function refreshVerifyAudioStatus(loadResults = false) {
+  let st;
+  try {
+    st = await api("/verify-audio/status");
+  } catch (e) {
+    return;
+  }
+  el("verify-audio-status-line").textContent = st.total
+    ? `${st.verified.toLocaleString()} of ${st.total.toLocaleString()} tracks verified so far` +
+      (st.mismatches ? ` · ${st.mismatches.toLocaleString()} possible mismatch(es)` : "")
+    : "";
+  el("verify-audio-all-btn").textContent = st.verified && st.verified < st.total ? "Continue whole library" : "Verify whole library";
+  if (loadResults && st.mismatches && !el("verify-audio-mismatches").children.length) {
+    const data = await api("/verify-audio/results").catch(() => null);
+    if (data) data.mismatches.forEach((m) => el("verify-audio-mismatches").appendChild(renderAudioMismatchRow(m)));
+  }
+}
+
+let verifyAudioFollowing = false;
+async function runVerifyAudio(trackIds) {
   const resultEl = el("verify-audio-bulk-result");
   const progressEl = el("verify-audio-bulk-progress");
   const progressFill = el("verify-audio-bulk-progress-fill");
   const list = el("verify-audio-mismatches");
+  const buttons = [el("verify-audio-bulk-btn"), el("verify-audio-all-btn")];
   list.innerHTML = "";
   resultEl.textContent = "";
-  if (!ids.length) {
+  if (trackIds && !trackIds.length) {
     resultEl.textContent = "Select some tracks in the library list first, then come back here.";
     return;
   }
-  btn.disabled = true;
-  const started = await api("/verify-audio", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ track_ids: ids }),
-  });
-  if (started.error) {
-    btn.disabled = false;
-    if (started.error !== "Already running") showToast(started.error, { kind: "error" });
-    else resultEl.textContent = "Already running…";
-    return;
+  if (!verifyAudioFollowing) {
+    let started;
+    try {
+      started = await api("/verify-audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(trackIds ? { track_ids: trackIds } : {}),
+      });
+    } catch (e) {
+      showToast(e.message, { kind: "error" });
+      return;
+    }
+    if (started.error && started.error !== "Already running") {
+      showToast(started.error, { kind: "error" });
+      return;
+    }
+    if (started.error) resultEl.textContent = "Already running — following it…";
   }
+  verifyAudioFollowing = true;
+  buttons.forEach((b) => { b.disabled = true; });
+  el("verify-audio-cancel").disabled = false;
+  el("verify-audio-cancel").classList.remove("hidden");
   progressFill.style.width = "0%";
   progressEl.classList.remove("hidden");
   let status;
   try {
     status = await pollProgress("/verify-audio/progress", (s) => {
-      btn.textContent = s.total ? `Listening… ${s.done}/${s.total}` : "Listening…";
+      el("verify-audio-status-line").textContent = s.total ? `Listening… ${s.done.toLocaleString()} / ${s.total.toLocaleString()}` : "Listening…";
       progressFill.style.width = s.total ? `${Math.min(100, (s.done / s.total) * 100)}%` : "0%";
       return s.running;
     });
   } catch (e) {
-    btn.disabled = false;
-    btn.textContent = original;
-    progressEl.classList.add("hidden");
     resultEl.textContent = e.message;
     return;
+  } finally {
+    verifyAudioFollowing = false;
+    buttons.forEach((b) => { b.disabled = false; });
+    el("verify-audio-cancel").classList.add("hidden");
+    progressEl.classList.add("hidden");
+    refreshVerifyAudioStatus();
   }
-  btn.disabled = false;
-  btn.textContent = original;
-  progressEl.classList.add("hidden");
   if (status.error) {
     resultEl.textContent = VERIFY_AUDIO_ERROR_MESSAGES[status.error] || `Failed: ${status.error}`;
     return;
   }
   const stats = status.result || {};
   const mismatches = stats.mismatches || [];
-  resultEl.textContent = `Checked ${stats.checked || 0} track(s)` +
+  resultEl.textContent = (status.cancelled ? "Stopped — what was checked is kept. " : "") +
+    `Checked ${stats.checked || 0} track(s)` +
     (stats.errors ? `, ${stats.errors} couldn't be identified` : "") +
     (mismatches.length ? `. ${mismatches.length} possible mismatch(es) below.` : " — no mismatches found.");
   mismatches.forEach((m) => list.appendChild(renderAudioMismatchRow(m)));
+}
+
+el("verify-audio-bulk-btn").addEventListener("click", () => runVerifyAudio(Array.from(state.selected)));
+el("verify-audio-all-btn").addEventListener("click", () => runVerifyAudio(null));
+el("verify-audio-cancel").addEventListener("click", async () => {
+  el("verify-audio-cancel").disabled = true;
+  await api("/jobs/verify_audio/cancel", { method: "POST" }).catch(() => {});
 });
 
 el("tags-close").addEventListener("click", () => el("tags-backdrop").classList.add("hidden"));

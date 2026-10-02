@@ -2317,3 +2317,4 @@ body[data-layout="row-density"] .track-row { height: 30px; }
 .dup-review-track-file { font-size: 11px; color: var(--text-dim); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dup-review-track.best .dup-review-track-title::after { content: "  ★ best quality"; color: var(--accent); font-size: 11px; font-weight: 400; }
 .link-btn { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
+.verify-audio-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
