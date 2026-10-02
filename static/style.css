@@ -2363,3 +2363,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; text-align: cen
 .skeleton-card { aspect-ratio: 1 / 1.35; border: 1px solid var(--border); opacity: .6; }
 @keyframes skeleton-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+/* cover-colour wash on the player bar (see setArtTint in app.js) */
+body[data-theme="default"] .player-bar,
+body[data-theme="graphite"] .player-bar { background-image: linear-gradient(90deg, var(--art-tint, transparent), transparent 55%); }

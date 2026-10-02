@@ -833,6 +833,37 @@ audio.addEventListener("seeked", () => {
   if (isFinite(audio.duration)) vuAudio.currentTime = audio.currentTime;
 });
 
+// A soft wash of the cover's dominant colour across the player bar (Default
+// and Graphite only -- the skeuomorphic themes have their own look). Colours
+// are weighted toward saturated, mid-light pixels so a mostly white or black
+// cover still yields its actual accent rather than grey.
+function setArtTint(rgb) {
+  document.documentElement.style.setProperty("--art-tint", rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, .22)` : "transparent");
+}
+function updateArtTint(img) {
+  try {
+    const size = 12;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, size, size);
+    const px = ctx.getImageData(0, 0, size, size).data;
+    let r = 0, g = 0, b = 0, total = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const R = px[i], G = px[i + 1], B = px[i + 2];
+      const hi = Math.max(R, G, B), lo = Math.min(R, G, B);
+      const sat = hi ? (hi - lo) / hi : 0;
+      const lum = (hi + lo) / 510;
+      const weight = (0.1 + sat) * (1 - Math.abs(lum - 0.5) * 1.6);
+      if (weight <= 0) continue;
+      r += R * weight; g += G * weight; b += B * weight; total += weight;
+    }
+    setArtTint(total ? [Math.round(r / total), Math.round(g / total), Math.round(b / total)] : null);
+  } catch (e) {
+    setArtTint(null);  // a tainted canvas or no canvas support: just no tint
+  }
+}
+
 function playTrack(track, contextList, opts) {
   stopRadioNowPlayingPolling();
   stopRadioLevelsPolling();
@@ -853,7 +884,8 @@ function playTrack(track, contextList, opts) {
   el("np-sub").textContent = [track.artist, track.primary_genre, track.year].filter(Boolean).join(" · ");
   const artEl = el("np-art");
   artEl.classList.remove("hidden");
-  artEl.onerror = () => artEl.classList.add("hidden");
+  artEl.onerror = () => { artEl.classList.add("hidden"); setArtTint(null); };
+  artEl.onload = () => updateArtTint(artEl);
   artEl.src = artUrl(track.id, true);
   const artFetchBtn = el("art-fetch-btn");
   if (artFetchBtn) artFetchBtn.classList.remove("hidden");

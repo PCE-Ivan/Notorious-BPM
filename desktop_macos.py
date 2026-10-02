@@ -298,6 +298,77 @@ def _bind_file_drop(window):
     doc.events.drop += DOMEventHandler(on_drop, True, False)
 
 
+# --------------------------------------------------------------- menu bar --
+# A Mac app with only the default menus feels unfinished, and everything in
+# this app is reachable only by finding the right button. These drive the
+# same buttons/functions the page already has (pywebview menu actions take no
+# keyboard shortcuts; the page's own key bindings cover that).
+def _js_str(text):
+    return json.dumps(text)
+
+
+def _page_click(window, element_id):
+    window.evaluate_js(f"(function(){{var e=document.getElementById({_js_str(element_id)});if(e)e.click();}})()")
+
+
+def _page_call(window, code):
+    window.evaluate_js(f"(function(){{try{{{code}}}catch(e){{console.error(e)}}}})()")
+
+
+def _build_menu(window):
+    from webview.menu import Menu, MenuAction, MenuSeparator
+
+    def click(title, element_id):
+        return MenuAction(title, lambda: _page_click(window, element_id))
+
+    def call(title, code):
+        return MenuAction(title, lambda: _page_call(window, code))
+
+    layouts = [("Classic", "classic"), ("Command Bar", "command-bar"), ("Grouped Ribbon", "grouped-ribbon"), ("Row-First Density", "row-density")]
+    themes = [("Match System", "system"), ("Default", "default"), ("Graphite", "graphite"), ("Hi-Fi", "hifi"), ("Cassette", "cassette"), ("Vinyl", "vinyl")]
+    return [
+        Menu("File", [
+            click("Add Music Files…", "library-add-files"),
+            click("Add a Folder of Music…", "library-add-folder"),
+            MenuSeparator(),
+            click("Rescan Library", "rescan-library"),
+            click("Choose Music Folder…", "choose-folder"),
+            MenuSeparator(),
+            click("New Library…", "library-new"),
+            click("Open Library…", "library-open"),
+        ]),
+        Menu("Browse", [
+            call("Tracks", "setBrowseView('tracks')"),
+            call("Albums", "setBrowseView('albums')"),
+            call("Artists", "setBrowseView('artists')"),
+            MenuSeparator(),
+            call("Search", "var s=document.getElementById('search');s.focus();s.select();"),
+            MenuSeparator(),
+            Menu("Layout", [call(title, f"applyLayoutMode({_js_str(name)})") for title, name in layouts]),
+            Menu("Appearance", [call(title, f"applyTheme({_js_str(name)})") for title, name in themes]),
+        ]),
+        Menu("Playback", [
+            call("Play / Pause", "togglePlayPause()"),
+            call("Next Track", "playNext()"),
+            call("Previous Track", "playPrevious()"),
+            MenuSeparator(),
+            click("Shuffle", "shuffle-toggle"),
+            click("Queue", "queue-btn"),
+            click("Level Volume Across Tracks", "level-btn"),
+        ]),
+        Menu("Tools", [
+            click("Find Duplicates…", "find-duplicates"),
+            click("Tag Checker…", "open-tag-checker"),
+            click("Library Health…", "open-health"),
+            click("Change History…", "open-history"),
+            click("Activity", "activity-btn"),
+            MenuSeparator(),
+            click("Help", "open-help"),
+            click("About", "open-about"),
+        ]),
+    ]
+
+
 def main():
     global ACTIVE_PORT
     import library_manager
@@ -360,7 +431,7 @@ def main():
     # geometry via the inspector -- left on, it opens the Web Inspector
     # automatically on every launch, so it's off again now that both are
     # fixed.
-    webview.start(private_mode=False)
+    webview.start(private_mode=False, menu=_build_menu(window))
 
 
 if __name__ == "__main__":

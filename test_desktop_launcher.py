@@ -127,5 +127,54 @@ class DropTest(unittest.TestCase):
         self.assertEqual(seen["body"], {"paths": ["/a.mp3", "/b folder"]})
 
 
+class MenuTest(unittest.TestCase):
+    class FakeWindow:
+        def __init__(self):
+            self.js = []
+
+        def evaluate_js(self, code):
+            self.js.append(code)
+
+    @staticmethod
+    def walk(items):
+        from webview.menu import Menu
+        for item in items:
+            if isinstance(item, Menu):
+                yield from MenuTest.walk(item.items)
+            else:
+                yield item
+
+    def test_every_action_drives_something_the_page_really_has(self):
+        import re
+        window = self.FakeWindow()
+        menus = desktop_macos._build_menu(window)
+        self.assertEqual([m.title for m in menus], ["File", "Browse", "Playback", "Tools"])
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        actions = [a for a in self.walk(menus) if hasattr(a, "function")]
+        self.assertGreater(len(actions), 25)
+        for action in actions:
+            window.js.clear()
+            action.function()
+            self.assertEqual(len(window.js), 1, action.title)
+            m = re.search(r'getElementById\("([^"]+)"\)', window.js[0])
+            if m and "click()" in window.js[0]:
+                self.assertIn(f'id="{m.group(1)}"', html, f"menu item {action.title!r} clicks a button that doesn't exist")
+
+    def test_functions_called_from_the_menu_exist_in_the_page_scripts(self):
+        import re
+        window = self.FakeWindow()
+        static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+        source = "".join(open(os.path.join(static, n), encoding="utf-8").read() for n in os.listdir(static) if n.endswith(".js"))
+        called = set()
+        for action in [a for a in self.walk(desktop_macos._build_menu(window)) if hasattr(a, "function")]:
+            window.js.clear()
+            action.function()
+            called.update(re.findall(r"\b(setBrowseView|applyLayoutMode|applyTheme|togglePlayPause|playNext|playPrevious)\(", window.js[0]))
+        self.assertEqual(called, {"setBrowseView", "applyLayoutMode", "applyTheme", "togglePlayPause", "playNext", "playPrevious"})
+        for name in called:
+            self.assertRegex(source, rf"function {name}\(", f"{name} isn't defined by any page script")
+
+
 if __name__ == "__main__":
     unittest.main()
