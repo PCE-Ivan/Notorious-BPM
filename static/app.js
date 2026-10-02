@@ -3,6 +3,8 @@ const API = "/api";
 const state = {
   q: "", genre: "", decade: "", artist: "", album: "", language: "", ratedOnly: false, rating: "", sort: "artist",
   view: "tracks", // "tracks" | "albums" | "artists" -- see browse.js
+  cursorId: null, // keyboard cursor row (keys.js)
+  anchorId: null, // where shift-click / shift+J/K range selection starts
   offset: 0, pageSize: 100, total: 0, loadingMore: false, hasMore: true,
   currentTrack: null, // full track object
   currentList: [], // list currently being browsed/played from (for "next" fallback)
@@ -309,6 +311,7 @@ function buildTrackRow(t, displayIdx, { showAdd, contextList }) {
   row.dataset.id = t.id;
   if (state.currentTrack && state.currentTrack.id === t.id) row.classList.add("playing");
   if (state.selected.has(t.id)) row.classList.add("selected");
+  if (state.cursorId === t.id) row.classList.add("cursor");
   row.innerHTML = `
     <div class="col-check"><input type="checkbox" ${state.selected.has(t.id) ? "checked" : ""}></div>
     <div class="col-art">${t.has_art === 0 ? "" : `<img loading="lazy" src="${artUrl(t.id, true)}" alt="" onerror="this.remove()">`}</div>
@@ -324,11 +327,21 @@ function buildTrackRow(t, displayIdx, { showAdd, contextList }) {
   `;
   row.addEventListener("click", (e) => {
     if (e.target.closest(".col-add") || e.target.closest(".col-check") || e.target.closest(".col-queue") || e.target.closest(".row-stars") || e.target.closest(".col-lookup")) return;
-    playTrack(t, contextList);
+    // Finder/Mail conventions: shift-click extends a range from the last
+    // clicked row, cmd/ctrl-click toggles one row; a plain click plays.
+    if (e.shiftKey) {
+      selectRangeTo(t.id, contextList);
+    } else if (e.metaKey || e.ctrlKey) {
+      toggleSelection(t.id, row);
+    } else {
+      setNavCursor(t.id);
+      playTrack(t, contextList);
+    }
   });
   row.querySelector(".col-check input").addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleSelection(t.id, row);
+    if (e.shiftKey && state.anchorId != null) selectRangeTo(t.id, contextList);
+    else toggleSelection(t.id, row);
   });
   row.querySelector(".col-queue").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -624,6 +637,8 @@ async function lookupTrackTags(t, row, btn) {
 
 // ------------------------------------------------------------ selection --
 function toggleSelection(trackId, row) {
+  state.anchorId = trackId;
+  setNavCursor(trackId);
   if (state.selected.has(trackId)) {
     state.selected.delete(trackId);
     row.classList.remove("selected");
@@ -634,8 +649,48 @@ function toggleSelection(trackId, row) {
   updateSelectionToolbar();
 }
 
+// Selects every row between the anchor (the last row toggled or clicked) and
+// this one, inclusive -- in whichever list is showing.
+function selectRangeTo(trackId, list) {
+  const a = list.findIndex((t) => t.id === state.anchorId);
+  const b = list.findIndex((t) => t.id === trackId);
+  if (a < 0 || b < 0) {
+    state.anchorId = trackId;
+    state.selected.add(trackId);
+  } else {
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) state.selected.add(list[i].id);
+  }
+  setNavCursor(trackId);
+  syncSelectionView();
+  updateSelectionToolbar();
+}
+
+// Rows are built from state.selected, so the windowed library list just
+// re-renders; other lists (a playlist) update their rows in place.
+function syncSelectionView() {
+  if (state.view === "tracks" && !el("library-view").classList.contains("hidden")) {
+    renderLibraryWindow(true);
+    return;
+  }
+  document.querySelectorAll("#playlist-tracks .track-row").forEach((row) => {
+    const on = state.selected.has(Number(row.dataset.id));
+    row.classList.toggle("selected", on);
+    const cb = row.querySelector(".col-check input");
+    if (cb) cb.checked = on;
+  });
+}
+
+// The keyboard cursor (J/K in keys.js): a marker on one row, separate from
+// what's playing and what's selected.
+function setNavCursor(trackId) {
+  state.cursorId = trackId;
+  document.querySelectorAll(".track-row.cursor").forEach((r) => r.classList.remove("cursor"));
+  document.querySelectorAll(`.track-row[data-id="${trackId}"]`).forEach((r) => r.classList.add("cursor"));
+}
+
 function clearSelection() {
   state.selected.clear();
+  state.anchorId = null;
   document.querySelectorAll(".track-row.selected").forEach((row) => {
     row.classList.remove("selected");
     const cb = row.querySelector(".col-check input");
