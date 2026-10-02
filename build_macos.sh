@@ -88,7 +88,9 @@ fi
 echo "== Relaunching app =="
 open "/Applications/$APP_NAME"
 sleep 3
-curl -s -o /dev/null -w "app responding: %{http_code}\n" http://127.0.0.1:5151/api/facets
+# Not fatal: right after a rebuild the app may be waiting on macOS's folder-access
+# dialog (no server yet), and the build itself has already succeeded by this point.
+curl -s -o /dev/null -w "app responding: %{http_code}\n" http://127.0.0.1:5151/api/facets || echo "app not responding yet (waiting on a macOS permission dialog? click Allow)"
 
 echo "== Done =="
 echo "App:      /Applications/$APP_NAME"
