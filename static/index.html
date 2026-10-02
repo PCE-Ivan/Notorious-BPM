@@ -694,6 +694,18 @@
       <button id="dup-toggle-details" class="btn-small dup-toggle-details hidden">Show details</button>
       <div id="dup-details" class="dup-details hidden"></div>
       <button id="dup-review-open" class="btn-secondary dup-clean-btn hidden">Review remaining duplicates</button>
+
+      <div class="dup-audio">
+        <h4>Compare the actual audio</h4>
+        <p id="dup-audio-text" class="dup-summary-note">Finds the same recording even when the names and tags differ.</p>
+        <div id="dup-audio-progress" class="dup-progress hidden"><div id="dup-audio-progress-fill" class="dup-progress-fill"></div></div>
+        <div class="dup-audio-actions">
+          <button id="dup-audio-scan" class="btn-secondary">Find duplicates by sound</button>
+          <button id="dup-audio-cancel" class="btn-small hidden">Cancel</button>
+          <button id="dup-audio-review" class="btn-primary hidden">Review matches</button>
+        </div>
+        <p class="dup-summary-note"><span id="dup-dismissed-note"></span> <button id="dup-dismissed-reset" class="link-btn hidden">Show them again</button></p>
+      </div>
     </div>
   </div>
 </div>
@@ -701,7 +713,7 @@
 <div id="dup-review-backdrop" class="modal-backdrop hidden">
   <div class="dup-panel dup-review-panel">
     <div class="dup-panel-header">
-      <h3>Review remaining duplicates</h3>
+      <h3 id="dup-review-title">Review remaining duplicates</h3>
       <button id="dup-review-close" class="btn-icon" title="Close">✕</button>
     </div>
     <div id="dup-review-bulk-bar" class="dup-review-bulk-bar hidden">
@@ -711,7 +723,7 @@
     </div>
     <div id="dup-review-progress" class="dup-progress hidden"><div id="dup-review-progress-fill" class="dup-progress-fill"></div></div>
     <div class="dup-body">
-      <p class="dup-summary-text">
+      <p id="dup-review-intro" class="dup-summary-text">
         Same song, multiple copies, but nothing safe to guess about which one to keep — format,
         album, year, and duration are shown for each so you can tell them apart (a lossless FLAC
         or ALAC copy is worth keeping over a lossy MP3/AAC one of the same song). Check the ones

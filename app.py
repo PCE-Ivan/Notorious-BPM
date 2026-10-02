@@ -22,6 +22,7 @@ import urllib.request
 
 from flask import Flask, g, jsonify, request, send_file, abort, send_from_directory, make_response, Response
 
+import audio_dupes
 import config as jukebox_config
 import health
 import jobs
@@ -149,6 +150,7 @@ def _ensure_deep_scan_columns(db):
             created_at TEXT NOT NULL
         )
     """)
+    audio_dupes.ensure_tables(db)
 
     # Full-text index for search, kept in sync automatically by triggers so
     # every write path (scan_library's raw sqlite3 connection included)
@@ -316,7 +318,7 @@ _library_lock = threading.Lock()
 # Quiet housekeeping the user never asked for by name -- it should never be
 # the reason a library switch is refused. A switch stops these (briefly
 # waiting for them to notice) and only refuses for work the user started.
-_HOUSEKEEPING_JOBS = ("art_warm", "health_check")
+_HOUSEKEEPING_JOBS = ("art_warm", "health_check", "audio_dupes")
 
 
 def _stop_housekeeping_jobs(wait=5.0):
@@ -1934,6 +1936,7 @@ def _switch_library(db_path, music_dir):
         # again (it's gated to run once per process) -- a freshly-opened
         # library would silently be missing columns/tables on first use.
         _schema_ready = False
+        _audio_dupe_reset()  # its groups are track ids of the library being left
 
         os.environ["JUKEBOX_DB_PATH"] = db_path
         if music_dir:
@@ -2620,6 +2623,8 @@ def duplicates_auto_clean():
 
     db = get_db()
     to_delete, groups_cleaned, skipped_groups, repeat_groups_cleaned, same_recording_cleaned = _get_cached_dup_plan(db)
+    dismissed = _dismissed_pairs(db)
+    skipped_groups = [g for g in skipped_groups if not _group_dismissed([t["id"] for t in g["tracks"]], dismissed)]
     groups_skipped = len(skipped_groups)
 
     if dry_run:
@@ -2651,6 +2656,8 @@ def duplicates_review():
     a human to look through and pick which copy to keep."""
     db = get_db()
     _to_delete, _groups_cleaned, skipped_groups, _repeat_groups_cleaned, _same_recording_cleaned = _get_cached_dup_plan(db)
+    dismissed = _dismissed_pairs(db)
+    skipped_groups = [g for g in skipped_groups if not _group_dismissed([t["id"] for t in g["tracks"]], dismissed)]
 
     limit = min(_parse_int_arg(request.args.get("limit", 20), "limit"), 50)
     offset = _parse_int_arg(request.args.get("offset", 0), "offset")
@@ -2663,6 +2670,253 @@ def duplicates_review():
         ],
         "total_groups": len(skipped_groups),
     })
+
+
+# ------------------------------------------------- duplicates: by sound --
+# The title-based finder above can't see past tags. This one fingerprints the
+# audio itself (see audio_dupes.py) and groups tracks that are the same
+# recording however they're named, tagged or encoded. Fingerprints are cached
+# in the library file, so only the first run is slow (about 0.2 s per track,
+# a few at a time); after that, finding duplicates is a few seconds of
+# comparison. Like the verify-against-AcoustID tool, it never deletes by
+# itself -- it hands groups to the review screen.
+def _audio_dupes_summary(s):
+    r = s.get("result") or {}
+    if not r.get("groups"):
+        return "No duplicates by sound"
+    return "{g} group{gs} of the same recording ({t} files)".format(
+        g=r["groups"], gs="" if r["groups"] == 1 else "s", t=r["tracks"])
+
+
+_audio_dupes_job = jobs.Job(
+    "audio_dupes", "Finding duplicates by sound", summarize=_audio_dupes_summary,
+    stage="", failed=0,
+)
+_audio_dupes_state = _audio_dupes_job.state
+_AUDIO_DUPE_WORKERS = max(2, min(4, (os.cpu_count() or 2)))
+_audio_dupe_lock = threading.Lock()
+_audio_dupe_results = {"groups": [], "computed_at": None}
+
+
+def _audio_dupe_reset():
+    with _audio_dupe_lock:
+        _audio_dupe_results["groups"] = []
+        _audio_dupe_results["computed_at"] = None
+
+
+def _dismissed_pairs(db):
+    return {r[0] for r in db.execute("SELECT key FROM dup_dismissed")}
+
+
+def _pair_key(a, b):
+    a, b = int(a), int(b)
+    return f"{a},{b}" if a < b else f"{b},{a}"
+
+
+def _group_dismissed(ids, dismissed):
+    """A group is hidden only when *every* pair in it was dismissed, so a new
+    copy joining a dismissed group brings it back for review."""
+    ids = list(ids)
+    if len(ids) < 2 or not dismissed:
+        return False
+    return all(_pair_key(a, b) in dismissed for i, a in enumerate(ids) for b in ids[i + 1:])
+
+
+def _run_audio_dupes_bg(fpcalc_path):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    job = _audio_dupes_job
+    try:
+        audio_dupes.ensure_tables(conn)
+        todo = audio_dupes.tracks_needing_fingerprint(conn)
+        total = len(todo)
+        job.set(stage="fingerprinting", total=total, done=0)
+
+        def work(row):
+            fpath = os.path.join(MUSIC_DIR, row["path"])
+            if not os.path.isfile(fpath):
+                return row["id"], None, "missing"
+            try:
+                duration, fp = audio_dupes.compute_fingerprint(fpcalc_path, fpath)
+            except audio_dupes.FingerprintError as e:
+                return row["id"], None, str(e)
+            return row["id"], (duration, fp), None
+
+        def flush(pending):
+            if pending:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO audio_fingerprints (track_id, fp, duration, algo, created_at) VALUES (?,?,?,?,?)",
+                    pending)
+                conn.commit()
+            return []
+
+        pending, failed = [], 0
+        pool = ThreadPoolExecutor(max_workers=_AUDIO_DUPE_WORKERS)
+        try:
+            for i, (track_id, result, problem) in enumerate(pool.map(work, todo)):
+                if result is not None:
+                    duration, fp = result
+                    pending.append((track_id, audio_dupes.to_blob(fp), duration, audio_dupes.ALGORITHM, time.time()))
+                else:
+                    failed += 1
+                    log.info("No fingerprint for track %s: %s", track_id, problem)
+                    if problem == audio_dupes.NO_AUDIO:
+                        # Remember silent/empty files so they aren't retried every run.
+                        pending.append((track_id, b"", 0.0, audio_dupes.ALGORITHM, time.time()))
+                if len(pending) >= 100:
+                    pending = flush(pending)
+                job.state["failed"] = failed
+                job.progress(i + 1, total)
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            flush(pending)
+            raise
+        pool.shutdown()
+        flush(pending)
+
+        job.set(stage="comparing", total=1, done=0)
+        entries = audio_dupes.load_fingerprints(conn)
+        pairs = audio_dupes.find_pairs(entries, progress=job.progress)
+        groups = audio_dupes.group_pairs(pairs)
+        with _audio_dupe_lock:
+            _audio_dupe_results["groups"] = groups
+            _audio_dupe_results["computed_at"] = time.time()
+        job.state["result"] = {
+            "groups": len(groups), "tracks": sum(len(g["ids"]) for g in groups),
+            "fingerprinted": len(entries), "failed": failed,
+        }
+    finally:
+        conn.close()
+
+
+@app.route("/api/audio-dupes/status")
+def audio_dupes_status():
+    db = get_db()
+    total = db.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    # "analysed" includes silent/empty files (remembered, so never retried).
+    ready = db.execute("SELECT COUNT(*) FROM audio_fingerprints WHERE algo = ?", (audio_dupes.ALGORITHM,)).fetchone()[0]
+    with _audio_dupe_lock:
+        computed_at = _audio_dupe_results["computed_at"]
+    return jsonify({
+        "total": total, "fingerprinted": ready,
+        "fpcalc": bool(_find_binary("fpcalc")),
+        "computed_at": computed_at,
+        "groups": len(_audio_dupe_live_groups(db)) if computed_at else 0,
+        "dismissed_pairs": db.execute("SELECT COUNT(*) FROM dup_dismissed").fetchone()[0],
+    })
+
+
+@app.route("/api/audio-dupes/scan", methods=["POST"])
+def audio_dupes_scan():
+    fpcalc_path = _find_binary("fpcalc")
+    if not fpcalc_path:
+        return jsonify({"started": False, "error": "fpcalc_missing"})
+    _ensure_schema()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        needed = conn.execute(
+            "SELECT COUNT(*) FROM tracks t LEFT JOIN audio_fingerprints f ON f.track_id = t.id AND f.algo = ? WHERE f.track_id IS NULL",
+            (audio_dupes.ALGORITHM,)).fetchone()[0]
+    finally:
+        conn.close()
+    if needed:
+        blocked = _music_blocker_response()
+        if blocked:
+            return blocked
+    if not _audio_dupes_job.start(_run_audio_dupes_bg, fpcalc_path, guard=_library_lock, prepare=_prepare_job, total=needed):
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True, "needed": needed})
+
+
+@app.route("/api/audio-dupes/progress")
+def audio_dupes_progress():
+    return jsonify(_audio_dupes_state)
+
+
+def _audio_dupe_live_groups(db):
+    """Cached groups minus tracks deleted since, and minus groups already
+    reviewed and dismissed."""
+    with _audio_dupe_lock:
+        groups = list(_audio_dupe_results["groups"])
+    if not groups:
+        return []
+    existing = {r[0] for r in db.execute("SELECT id FROM tracks")}
+    dismissed = _dismissed_pairs(db)
+    live = []
+    for g in groups:
+        ids = [i for i in g["ids"] if i in existing]
+        if len(ids) >= 2 and not _group_dismissed(ids, dismissed):
+            live.append({"ids": ids, "ber": g["ber"]})
+    return live
+
+
+def _audio_match_label(ber):
+    if ber <= 0.10:
+        return "identical recording"
+    if ber <= 0.18:
+        return "very likely the same recording"
+    return "probably the same recording (a different master or heavy re-encode?)"
+
+
+@app.route("/api/audio-dupes/groups")
+def audio_dupes_groups():
+    db = get_db()
+    live = _audio_dupe_live_groups(db)
+    limit = min(_parse_int_arg(request.args.get("limit", 20), "limit"), 50)
+    offset = _parse_int_arg(request.args.get("offset", 0), "offset")
+    out = []
+    for g in live[offset:offset + limit]:
+        marks = ",".join("?" * len(g["ids"]))
+        rows = db.execute(
+            f"SELECT {TRACK_FIELDS}, t.path FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id WHERE t.id IN ({marks})",
+            g["ids"]).fetchall()
+        tracks = [track_to_dict(r) for r in rows]
+        for t in tracks:
+            try:
+                size = os.stat(os.path.join(MUSIC_DIR, t["path"])).st_size
+            except OSError:
+                size = None
+            t["size"] = size
+            t["kbps"] = round(size * 8 / 1000 / t["duration"]) if size and t.get("duration") else None
+        resolved = _resolve_same_recording(tracks)
+        out.append({
+            "artist": next((t["artist"] for t in tracks if t.get("artist")), None),
+            "title": next((t["title"] for t in tracks if t.get("title")), None),
+            "match": _audio_match_label(g["ber"]),
+            "ber": g["ber"],
+            "best_id": resolved[0]["id"] if resolved else None,
+            "tracks": tracks,
+        })
+    return jsonify({"groups": out, "total_groups": len(live)})
+
+
+@app.route("/api/duplicates/dismiss", methods=["POST"])
+def duplicates_dismiss():
+    """"These aren't duplicates": remembered, so the group stops coming back
+    (for either finder)."""
+    data = request.get_json(force=True, silent=True) or {}
+    ids = [i for i in (data.get("track_ids") or []) if isinstance(i, int)]
+    if len(ids) < 2 or len(ids) > 60:
+        return jsonify({"ok": False, "error": "Need between 2 and 60 tracks."}), 400
+    db = get_db()
+    now = time.time()
+    db.executemany(
+        "INSERT OR REPLACE INTO dup_dismissed (key, kind, created_at) VALUES (?, ?, ?)",
+        [(_pair_key(a, b), "pair", now) for i, a in enumerate(ids) for b in ids[i + 1:]])
+    db.commit()
+    _invalidate_dup_plan_cache()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/duplicates/dismissed/clear", methods=["POST"])
+def duplicates_dismissed_clear():
+    db = get_db()
+    cleared = db.execute("SELECT COUNT(*) FROM dup_dismissed").fetchone()[0]
+    db.execute("DELETE FROM dup_dismissed")
+    db.commit()
+    _invalidate_dup_plan_cache()
+    return jsonify({"ok": True, "cleared": cleared})
 
 
 def _parse_int_arg(value, field_name):

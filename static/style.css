@@ -2307,3 +2307,13 @@ body[data-theme="vinyl"] .col-art { border-radius: 50%; }
 .track-row .col-genre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 body[data-layout="row-density"] .track-row { height: 30px; }
 .main, #main-scroll, #track-list { overflow-anchor: none; }
+
+/* ------------------------------------------------ duplicates by sound -- */
+.dup-audio { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); }
+.dup-audio h4 { margin: 0 0 4px; font-size: 13px; }
+.dup-audio-actions { display: flex; gap: 8px; align-items: center; margin: 10px 0 6px; flex-wrap: wrap; }
+.dup-review-group-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.dup-review-match { font-weight: 400; color: var(--text-dim); font-size: 11px; margin-left: 6px; }
+.dup-review-track-file { font-size: 11px; color: var(--text-dim); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dup-review-track.best .dup-review-track-title::after { content: "  ★ best quality"; color: var(--accent); font-size: 11px; font-weight: 400; }
+.link-btn { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
