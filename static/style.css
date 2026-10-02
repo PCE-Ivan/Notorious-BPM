@@ -2347,3 +2347,6 @@ body[data-layout="row-density"] .track-row { height: 30px; }
 .track-row.cursor.selected, .track-row.cursor.playing { background: var(--accent-dim); }
 kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; text-align: center; font: 12px/1.5 ui-monospace, Menlo, monospace; background: var(--bg-elevated); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 3px; }
 .help-keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: baseline; margin: 6px 0 14px; }
+.level-btn { opacity: .55; font-size: 15px; }
+.level-btn:hover { opacity: .9; }
+.level-btn.active { opacity: 1; color: var(--accent); }

@@ -27,6 +27,7 @@ import config as jukebox_config
 import health
 import jobs
 import journal
+import loudness
 import logging
 import logging_setup
 import system_status
@@ -151,6 +152,7 @@ def _ensure_deep_scan_columns(db):
         )
     """)
     audio_dupes.ensure_tables(db)
+    loudness.ensure_tables(db)
 
     # Full-text index for search, kept in sync automatically by triggers so
     # every write path (scan_library's raw sqlite3 connection included)
@@ -318,7 +320,7 @@ _library_lock = threading.Lock()
 # Quiet housekeeping the user never asked for by name -- it should never be
 # the reason a library switch is refused. A switch stops these (briefly
 # waiting for them to notice) and only refuses for work the user started.
-_HOUSEKEEPING_JOBS = ("art_warm", "health_check", "audio_dupes", "verify_audio")
+_HOUSEKEEPING_JOBS = ("art_warm", "health_check", "audio_dupes", "verify_audio", "loudness")
 
 
 def _stop_housekeeping_jobs(wait=5.0):
@@ -1464,6 +1466,110 @@ def verify_audio_dismiss():
     db.execute("UPDATE audio_verified SET dismissed = 1 WHERE track_id = ?", (track_id,))
     db.commit()
     return jsonify({"ok": True})
+
+
+# ----------------------------------------------------------- loudness --
+# Measured once per track in the background (see loudness.py) so the player can
+# level volume across tracks. Gain is only ever a reduction.
+_loudness_job = jobs.Job(
+    "loudness", "Measuring track loudness",
+    summarize=lambda s: "{m} measured".format(m=(s["result"] or {}).get("measured", 0)),
+)
+_loudness_state = _loudness_job.state
+_LOUDNESS_WORKERS = max(2, min(3, (os.cpu_count() or 2) - 1))
+
+
+def _run_loudness_bg(ffmpeg_path):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        loudness.ensure_tables(conn)
+        todo = loudness.tracks_needing_measurement(conn)
+        total = len(todo)
+        _loudness_job.set(total=total, done=0)
+
+        def work(row):
+            fpath = os.path.join(MUSIC_DIR, row["path"])
+            if not os.path.isfile(fpath):
+                return row["id"], None, False   # not on disk right now: try again next time
+            try:
+                lufs, peak = loudness.measure(ffmpeg_path, fpath)
+                return row["id"], (lufs, peak), True
+            except loudness.LoudnessError as e:
+                log.info("No loudness for track %s: %s", row["id"], e)
+                return row["id"], (None, None), True   # unmeasurable: remember, don't retry forever
+
+        def flush(pending):
+            if pending:
+                conn.executemany("INSERT OR REPLACE INTO audio_loudness (track_id, lufs, peak, checked_at) VALUES (?,?,?,?)", pending)
+                conn.commit()
+            return []
+
+        pending, measured = [], 0
+        pool = ThreadPoolExecutor(max_workers=_LOUDNESS_WORKERS)
+        try:
+            for i, (track_id, result, record) in enumerate(pool.map(work, todo)):
+                if record:
+                    lufs, peak = result
+                    measured += 1 if lufs is not None else 0
+                    pending.append((track_id, lufs, peak, time.time()))
+                if len(pending) >= 50:
+                    pending = flush(pending)
+                _loudness_job.progress(i + 1, total)
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            flush(pending)
+            raise
+        pool.shutdown()
+        flush(pending)
+        _loudness_state["result"] = {"measured": measured, "checked": total}
+    finally:
+        conn.close()
+
+
+@app.route("/api/loudness/scan", methods=["POST"])
+def loudness_scan():
+    """Starts measuring only if some tracks haven't been -- cheap to call on
+    every launch."""
+    ffmpeg_path = _find_binary("ffmpeg")
+    if not ffmpeg_path:
+        return jsonify({"started": False, "error": "ffmpeg_missing"})
+    _ensure_schema()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        needed = len(loudness.tracks_needing_measurement(conn))
+    finally:
+        conn.close()
+    if not needed:
+        return jsonify({"started": False, "needed": 0})
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
+    started = _loudness_job.start(_run_loudness_bg, ffmpeg_path, guard=_library_lock, prepare=_prepare_job, total=needed)
+    return jsonify({"started": started, "needed": needed})
+
+
+@app.route("/api/loudness/progress")
+def loudness_progress():
+    return jsonify(_loudness_state)
+
+
+@app.route("/api/loudness/status")
+def loudness_status():
+    db = get_db()
+    total = db.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    measured = db.execute("SELECT COUNT(*) FROM audio_loudness WHERE lufs IS NOT NULL").fetchone()[0]
+    return jsonify({"total": total, "measured": measured, "target_lufs": loudness.TARGET_LUFS,
+                    "ffmpeg": bool(_find_binary("ffmpeg"))})
+
+
+@app.route("/api/loudness/<int:track_id>")
+def loudness_for_track(track_id):
+    row = get_db().execute("SELECT lufs, peak FROM audio_loudness WHERE track_id = ?", (track_id,)).fetchone()
+    lufs = row["lufs"] if row else None
+    return jsonify({"lufs": lufs, "gain_db": loudness.gain_db(lufs, row["peak"] if row else None)})
 
 
 @app.route("/api/tracks/<int:track_id>/lookup-tags", methods=["POST"])

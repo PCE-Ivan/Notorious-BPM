@@ -3,6 +3,8 @@ const API = "/api";
 const state = {
   q: "", genre: "", decade: "", artist: "", album: "", language: "", ratedOnly: false, rating: "", sort: "artist",
   view: "tracks", // "tracks" | "albums" | "artists" -- see browse.js
+  levelVolume: false, // "level volume across tracks" -- turns loud tracks down toward a common loudness
+  trackGain: 1, // linear gain (<= 1) for the playing track from that
   cursorId: null, // keyboard cursor row (keys.js)
   anchorId: null, // where shift-click / shift+J/K range selection starts
   offset: 0, pageSize: 100, total: 0, loadingMore: false, hasMore: true,
@@ -831,6 +833,7 @@ function playTrack(track, contextList, opts) {
   el("radio-identify-btn").classList.add("hidden");
   updateStars(track.rating || 0);
   refreshPlayingHighlight();
+  applyTrackGain(track);
   themeOnTrackChange(track);
   updateMediaSession(track, artUrl(track.id));
   api(`/plays/${track.id}`, { method: "POST" }).catch(() => {});
@@ -4534,12 +4537,70 @@ el("organize-by-artist").addEventListener("click", async () => {
 });
 
 // ----------------------------------------------------------------- volume --
+// What the <audio> element is actually set to: the volume slider times the
+// playing track's leveling gain. Gain is only ever a reduction (<= 1) -- the
+// real <audio> element stays out of Web Audio on purpose (AirPlay), and plain
+// element volume can't amplify.
+function setOutputVolume() {
+  const slider = Number(el("volume-slider").value) / 100;
+  audio.volume = Math.max(0, Math.min(1, slider * state.trackGain));
+}
+
+const trackGainCache = new Map();  // track id -> dB, only for measured tracks
+function applyTrackGain(track) {
+  state.trackGain = 1;
+  setOutputVolume();
+  if (!state.levelVolume || track.isRadio) return;
+  const apply = (db) => {
+    if (!state.currentTrack || state.currentTrack.id !== track.id) return;  // moved on meanwhile
+    state.trackGain = db == null ? 1 : Math.pow(10, db / 20);
+    setOutputVolume();
+  };
+  if (trackGainCache.has(track.id)) { apply(trackGainCache.get(track.id)); return; }
+  api(`/loudness/${track.id}`).then((d) => {
+    if (d.gain_db != null) trackGainCache.set(track.id, d.gain_db);  // unmeasured: ask again next time
+    apply(d.gain_db);
+  }).catch(() => {});
+}
+
+try { state.levelVolume = localStorage.getItem("jukebox-level-volume") === "1"; } catch (e) { /* private browsing */ }
+el("level-btn").classList.toggle("active", state.levelVolume);
+el("level-btn").addEventListener("click", async () => {
+  const btn = el("level-btn");
+  state.levelVolume = !state.levelVolume;
+  btn.classList.toggle("active", state.levelVolume);
+  try { localStorage.setItem("jukebox-level-volume", state.levelVolume ? "1" : "0"); } catch (e) { /* private browsing */ }
+  if (!state.levelVolume) {
+    state.trackGain = 1;
+    setOutputVolume();
+    showToast("Volume leveling off.", { kind: "info" });
+    return;
+  }
+  try {
+    const r = await api("/loudness/scan", { method: "POST" });
+    if (r.error === "ffmpeg_missing") {
+      state.levelVolume = false;
+      btn.classList.remove("active");
+      try { localStorage.setItem("jukebox-level-volume", "0"); } catch (e) { /* ignore */ }
+      showToast("Leveling needs “ffmpeg” installed (brew install ffmpeg).", { kind: "error" });
+      return;
+    }
+    showToast(r.started
+      ? `Volume leveling on. Measuring ${r.needed.toLocaleString()} track${r.needed === 1 ? "" : "s"} in the background (see Activity) — they level out as they're measured.`
+      : "Volume leveling on.", { kind: "success" });
+  } catch (e) {
+    showToast(e.message, { kind: "error" });
+  }
+  if (state.currentTrack) applyTrackGain(state.currentTrack);
+});
+if (state.levelVolume) setTimeout(() => { api("/loudness/scan", { method: "POST" }).catch(() => {}); }, 10000);
+
 (function initVolume() {
   let saved = null;
   try { saved = localStorage.getItem("jukebox-volume"); } catch (e) { /* private browsing */ }
   const vol = saved !== null ? Number(saved) : 100;
-  audio.volume = vol / 100;
   el("volume-slider").value = vol;
+  setOutputVolume();
   el("vinyl-volume").value = vol;
   el("vinyl-volume").style.setProperty("--fill", `${vol}%`);
   updateVolumeIcon(vol);
@@ -4549,7 +4610,7 @@ function updateVolumeIcon(vol) {
 }
 el("volume-slider").addEventListener("input", (e) => {
   const vol = Number(e.target.value);
-  audio.volume = vol / 100;
+  setOutputVolume();
   updateVolumeIcon(vol);
   el("vinyl-volume").value = vol;
   el("vinyl-volume").style.setProperty("--fill", `${vol}%`);
