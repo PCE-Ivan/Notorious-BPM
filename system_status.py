@@ -17,12 +17,84 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 
 PRIVACY_PANE_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
 
 
 def _problem(kind, message, fix=None, path=None):
     return {"kind": kind, "message": message, "fix": fix, "path": path}
+
+
+# -------------------------------------------------------- blocked folder opens --
+# A freshly built app asking to open ~/Desktop (or Documents, an external
+# drive) for the first time makes macOS show a consent dialog -- and until
+# someone answers it, the open() call *blocks* inside the kernel. It doesn't
+# fail, so nothing here used to notice: the library's first write hung
+# mid-commit (SQLite opens the containing folder to fsync it), every other
+# connection then reported "database is locked", and the status banner said all
+# was well. So every probe below runs in a helper thread with a timeout, and a
+# probe that doesn't come back is reported as exactly that: a pending prompt.
+PROBE_TIMEOUT = 2.0
+_pending = {}            # path -> a probe thread still stuck in the kernel
+_pending_lock = threading.Lock()
+
+
+def _probe(path, fn, timeout=None):
+    """Runs fn() against `path` in a daemon thread. Returns ("ok", value),
+    ("error", exception) or ("blocked", None). A blocked probe is remembered
+    and not repeated -- one stuck thread is enough, and polling must not pile
+    up more."""
+    with _pending_lock:
+        stuck = _pending.get(path)
+        if stuck is not None and stuck["thread"].is_alive():
+            return "blocked", None
+        _pending.pop(path, None)
+        box = {}
+
+        def run():
+            try:
+                box["value"] = fn()
+            except BaseException as e:   # reported to the caller, never raised in the thread
+                box["error"] = e
+
+        t = threading.Thread(target=run, name="access-probe", daemon=True)
+        t.start()
+        _pending[path] = {"thread": t, "box": box}
+    t.join(PROBE_TIMEOUT if timeout is None else timeout)
+    if t.is_alive():
+        return "blocked", None
+    with _pending_lock:
+        _pending.pop(path, None)
+    if "error" in box:
+        return "error", box["error"]
+    return "ok", box.get("value")
+
+
+def _prompt_pending_problem(path):
+    where = os.path.basename(path.rstrip(os.sep)) or path
+    return _problem(
+        "macos_prompt_pending",
+        f"macOS is waiting for your answer: it asks whether Notorious B.P.M. may access “{where}”. "
+        "Look for a permission dialog (it can be hidden behind this window) and click Allow — "
+        "your library opens the moment you do.",
+        fix="retry", path=path,
+    )
+
+
+def touch_folder(folder, timeout):
+    """Opens `folder` the way SQLite does on commit, waiting up to `timeout`
+    seconds. Used once at launch so macOS's consent dialog appears then, in
+    front, rather than at the first library write. Returns "ok", "error" or
+    "blocked"."""
+    state, _err = _probe(folder, lambda: _open_folder(folder), timeout=timeout)
+    return state
+
+
+def _open_folder(folder):
+    """The exact call SQLite makes to sync a journal's folder on commit."""
+    fd = os.open(folder, os.O_RDONLY)
+    os.close(fd)
 
 
 def _permission_problem(path):
@@ -39,7 +111,13 @@ def library_problems(db_path, music_dir):
     """Cheap direct probes of the two things everything else depends on."""
     problems = []
     if db_path:
+        folder = os.path.dirname(db_path) or "."
+        state, err = _probe(folder, lambda: _open_folder(folder))
+        if state == "blocked":
+            return [_prompt_pending_problem(folder)]
         try:
+            if state == "error":
+                raise err
             with open(db_path, "rb") as f:
                 f.read(16)
         except FileNotFoundError:
@@ -82,9 +160,16 @@ def music_problem(music_dir):
             "the library picks up where it left off.",
             fix="retry", path=music_dir,
         )
-    try:
+    def scan_one():
         with os.scandir(music_dir) as entries:
             next(entries, None)
+
+    state, err = _probe(music_dir, scan_one)
+    if state == "blocked":
+        return _prompt_pending_problem(music_dir)
+    try:
+        if state == "error":
+            raise err
     except FileNotFoundError:
         return _problem(
             "music_missing",

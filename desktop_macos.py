@@ -239,6 +239,16 @@ def _touch_protected_locations(jukebox_app):
                     f.read(16)
         except OSError as e:
             log.warning("Startup access probe could not read %s: %s", path, e)
+    # Reading the library file isn't the only thing SQLite does there: on the
+    # first write it also opens the *folder* (to sync it), and a freshly
+    # built app is asked about that separately -- the call then blocks until
+    # the dialog is answered. Provoke it here, up front, and wait for the
+    # answer (but not forever: the page explains it if it's still pending).
+    if jukebox_app.DB_PATH:
+        import system_status
+        folder = os.path.dirname(jukebox_app.DB_PATH) or "."
+        if system_status.touch_folder(folder, timeout=60) == "blocked":
+            log.warning("macOS is still waiting for an answer about %s; continuing without it.", folder)
 
 
 def _choose_port(preferred, db_path):

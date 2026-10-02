@@ -28,9 +28,14 @@ def log_dir():
     override = os.environ.get("JUKEBOX_LOG_DIR")
     if override:
         return override
-    db_override = os.environ.get("JUKEBOX_DB_PATH")
-    if db_override:
-        return os.path.join(os.path.dirname(db_override), "logs")
+    # A scratch/test environment sets JUKEBOX_CONFIG_PATH to its own folder and
+    # gets its logs there. Not keyed off JUKEBOX_DB_PATH: the real app sets that
+    # too (to the open library, wherever the user saved it -- the Desktop, an
+    # external drive), and logs belong in the app's own data folder, not
+    # sprinkled next to a library file.
+    config_override = os.environ.get("JUKEBOX_CONFIG_PATH")
+    if config_override:
+        return os.path.join(os.path.dirname(config_override), "logs")
     import config as jukebox_config
     return os.path.join(jukebox_config.get_app_data_dir(), "logs")
 

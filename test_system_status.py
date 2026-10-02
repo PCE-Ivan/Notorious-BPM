@@ -12,6 +12,8 @@ import shutil
 import sqlite3
 import stat
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -79,6 +81,89 @@ class LibraryProblemsTest(unittest.TestCase):
         kind, _ = system_status.describe_exception(
             sqlite3.DatabaseError("database disk image is malformed"), self.db, self.music)
         self.assertEqual(kind, "library_corrupt")
+
+
+class PendingPromptTest(unittest.TestCase):
+    """A first-time open of a protected folder blocks inside the kernel until
+    the macOS consent dialog is answered. That used to look like a healthy
+    library with every query failing "database is locked"."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="jukebox-prompt-")
+        self.db = os.path.join(self.tmp, "lib.nbpmlib")
+        with open(self.db, "wb") as f:
+            f.write(b"SQLite format 3\x00" + b"\x00" * 100)
+        self.music = os.path.join(self.tmp, "music")
+        os.makedirs(self.music)
+        self.release = threading.Event()
+        old_timeout = system_status.PROBE_TIMEOUT
+        system_status.PROBE_TIMEOUT = 0.2
+        self.addCleanup(setattr, system_status, "PROBE_TIMEOUT", old_timeout)
+        self.addCleanup(self.release.set)
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(system_status._pending.clear)
+
+    def block_open_of(self, folder):
+        real_open = os.open
+
+        def blocking(path, *a, **k):
+            if os.path.realpath(path) == os.path.realpath(folder):
+                self.release.wait(10)      # what the kernel does until the dialog is answered
+            return real_open(path, *a, **k)
+
+        return mock.patch.object(system_status.os, "open", side_effect=blocking)
+
+    def probe_threads(self):
+        return [t for t in threading.enumerate() if t.name == "access-probe" and t.is_alive()]
+
+    def test_blocked_library_folder_is_explained_instead_of_looking_healthy(self):
+        with self.block_open_of(self.tmp):
+            started = time.time()
+            problems = system_status.library_problems(self.db, self.music)
+            self.assertLess(time.time() - started, 2)
+            self.assertEqual([p["kind"] for p in problems], ["macos_prompt_pending"])
+            self.assertIn("Allow", problems[0]["message"])
+            self.assertIn(os.path.basename(self.tmp), problems[0]["message"])
+
+            # polling while it's still stuck neither waits again nor piles up threads
+            started = time.time()
+            for _ in range(5):
+                self.assertEqual(system_status.library_problems(self.db, self.music)[0]["kind"], "macos_prompt_pending")
+            self.assertLess(time.time() - started, 0.2)
+            self.assertEqual(len(self.probe_threads()), 1)
+
+            # the same problem is what a failed request is explained with
+            kind, message = system_status.describe_exception(sqlite3.OperationalError("database is locked"), self.db, self.music)
+            self.assertEqual(kind, "macos_prompt_pending")
+
+            self.release.set()                   # the user clicks Allow
+            for t in self.probe_threads():
+                t.join(2)
+        self.assertEqual(system_status.library_problems(self.db, self.music), [])
+
+    def test_blocked_music_folder_is_explained_too(self):
+        real_scandir = os.scandir
+        release = self.release
+
+        def blocking(path="."):
+            if os.path.realpath(path) == os.path.realpath(self.music):
+                release.wait(10)
+            return real_scandir(path)
+
+        with mock.patch.object(system_status.os, "scandir", side_effect=blocking):
+            problem = system_status.music_problem(self.music)
+            self.assertEqual(problem["kind"], "macos_prompt_pending")
+            self.assertIn("Allow", system_status.music_dir_blocker(self.music))
+            self.release.set()
+            for t in self.probe_threads():
+                t.join(2)
+        self.assertIsNone(system_status.music_problem(self.music))
+
+    def test_a_fast_folder_open_costs_nothing(self):
+        started = time.time()
+        self.assertEqual(system_status.library_problems(self.db, self.music), [])
+        self.assertLess(time.time() - started, 0.5)
+        self.assertEqual(self.probe_threads(), [])
 
 
 class RoutesTest(unittest.TestCase):
