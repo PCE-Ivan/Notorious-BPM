@@ -1,7 +1,8 @@
 const API = "/api";
 
 const state = {
-  q: "", genre: "", decade: "", artist: "", language: "", ratedOnly: false, rating: "", sort: "artist",
+  q: "", genre: "", decade: "", artist: "", album: "", language: "", ratedOnly: false, rating: "", sort: "artist",
+  view: "tracks", // "tracks" | "albums" | "artists" -- see browse.js
   offset: 0, pageSize: 100, total: 0, loadingMore: false, hasMore: true,
   currentTrack: null, // full track object
   currentList: [], // list currently being browsed/played from (for "next" fallback)
@@ -176,6 +177,7 @@ function trackQueryParams(extra = {}) {
   if (state.decade) p.set("decade", state.decade);
   if (state.language) p.set("language", state.language);
   if (state.artist) p.set("artist", state.artist);
+  if (state.album) p.set("album", state.album);
   if (state.ratedOnly) p.set("rated_only", "1");
   if (state.rating) p.set("rating", state.rating);
   p.set("sort", state.sort);
@@ -186,6 +188,10 @@ function trackQueryParams(extra = {}) {
 }
 
 async function loadTracks(reset = false) {
+  if (state.view !== "tracks") {  // Albums/Artists grid showing: refresh that instead (browse.js)
+    if (reset) reloadGrid();
+    return;
+  }
   if (reset) {
     state.offset = 0;
     state.hasMore = true;
@@ -241,6 +247,7 @@ async function loadTracks(reset = false) {
 
 el("main-scroll").addEventListener("scroll", () => {
   if (el("library-view").classList.contains("hidden")) return;
+  if (state.view !== "tracks") { browseScroll(); return; }
   scheduleLibraryWindow();
   const c = el("main-scroll");
   if (c.scrollTop + c.clientHeight > c.scrollHeight - 600) {
@@ -419,7 +426,7 @@ function libraryRowOptions() {
 function renderLibraryWindow(force = false) {
   const host = libraryHost();
   const rows = state.libraryRows;
-  if (!rows || !rows.length || el("library-view").classList.contains("hidden")) return;
+  if (!rows || !rows.length || el("library-view").classList.contains("hidden") || state.view !== "tracks") return;
 
   if (!vwin.rowH) {
     // First render (or after a layout change): put one real row in to
@@ -912,6 +919,7 @@ function countActiveFilters() {
   if (state.decade) n++;
   if (state.language) n++;
   if (state.artist) n++;
+  if (state.album) n++;
   if (state.ratedOnly) n++;
   if (state.rating) n++;
   return n;
@@ -2028,13 +2036,14 @@ el("filter-rating").addEventListener("change", (e) => {
 });
 el("sort").addEventListener("change", (e) => { state.sort = e.target.value; loadTracks(true); });
 function clearAllFilters() {
-  state.q = ""; state.genre = ""; state.decade = ""; state.language = ""; state.artist = ""; state.ratedOnly = false; state.rating = ""; state.sort = "artist";
+  state.q = ""; state.genre = ""; state.decade = ""; state.language = ""; state.artist = ""; state.album = ""; state.ratedOnly = false; state.rating = ""; state.sort = "artist";
   el("search").value = "";
   Array.from(el("filter-genre").options).forEach((o) => { o.selected = false; });
   Array.from(el("filter-decade").options).forEach((o) => { o.selected = false; });
   el("filter-language").value = ""; el("filter-artist").value = ""; el("filter-rated").checked = false;
   el("filter-rating").value = ""; el("sort").value = "artist";
   updateDeleteRatedVisibility();
+  if (typeof updateBrowseChrome === "function") updateBrowseChrome();
   loadTracks(true);
 }
 el("clear-filters").addEventListener("click", clearAllFilters);

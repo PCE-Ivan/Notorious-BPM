@@ -2318,3 +2318,26 @@ body[data-layout="row-density"] .track-row { height: 30px; }
 .dup-review-track.best .dup-review-track-title::after { content: "  ★ best quality"; color: var(--accent); font-size: 11px; font-weight: 400; }
 .link-btn { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .verify-audio-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* ------------------------------------------------- albums / artists grid -- */
+.view-bar { display: flex; align-items: center; gap: 12px; padding: 4px 0 10px; flex-wrap: wrap; }
+.view-switch { display: inline-flex; border: 1px solid var(--border); }
+.view-tab { background: transparent; color: var(--text-dim); border: none; padding: 6px 14px; font: inherit; cursor: pointer; }
+.view-tab + .view-tab { border-left: 1px solid var(--border); }
+.view-tab:hover { color: var(--text); background: var(--bg-hover); }
+.view-tab.active { color: var(--text); background: var(--accent-dim); box-shadow: inset 0 -2px 0 var(--accent); }
+.grid-sort { background: var(--bg-elevated); color: var(--text); border: 1px solid var(--border); padding: 5px 8px; font: inherit; }
+.filter-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; background: var(--accent-dim); border: 1px solid var(--accent); max-width: 100%; }
+.filter-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-chip button { background: none; border: none; color: var(--text); cursor: pointer; padding: 0 4px; font: inherit; }
+.grid-view { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px 16px; padding: 4px 2px 20px; }
+.grid-card { cursor: pointer; min-width: 0; outline: none; }
+.grid-card:focus-visible .grid-art { box-shadow: 0 0 0 2px var(--accent); }
+.grid-art { position: relative; aspect-ratio: 1 / 1; background: var(--bg-elevated); border: 1px solid var(--border); overflow: hidden; }
+.grid-art img, .grid-art-fallback { position: absolute; inset: 0; width: 100%; height: 100%; }
+.grid-art img { object-fit: cover; }
+.grid-art-fallback { display: flex; align-items: center; justify-content: center; font-size: 42px; color: var(--text-dim); opacity: .5; }
+.grid-play { position: absolute; right: 8px; bottom: 8px; width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--accent); color: #fff; cursor: pointer; font-size: 13px; opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; }
+.grid-card:hover .grid-play, .grid-card:focus-visible .grid-play { opacity: 1; transform: none; }
+.grid-title { margin-top: 7px; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grid-sub, .grid-meta { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

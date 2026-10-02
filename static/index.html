@@ -290,7 +290,17 @@
       </div>
 
       <div id="library-view" class="track-list-wrap">
+        <div class="view-bar">
+          <div class="view-switch" role="tablist" aria-label="Browse by">
+            <button class="view-tab active" role="tab" data-view="tracks">Tracks</button>
+            <button class="view-tab" role="tab" data-view="albums">Albums</button>
+            <button class="view-tab" role="tab" data-view="artists">Artists</button>
+          </div>
+          <select id="grid-sort" class="grid-sort hidden" aria-label="Sort"></select>
+          <span id="album-chip" class="filter-chip hidden"></span>
+        </div>
         <div id="track-list" class="track-list"></div>
+        <div id="grid-view" class="grid-view hidden"></div>
         <div id="load-sentinel" class="load-sentinel"></div>
       </div>
     </main>
@@ -1235,6 +1245,7 @@
 </div>
 
 <script src="app.js"></script>
+<script src="browse.js"></script>
 <script src="activity.js"></script>
 <script src="health.js"></script>
 <script src="history.js"></script>

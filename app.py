@@ -3016,7 +3016,7 @@ def _parse_int_arg(value, field_name):
 
 
 def _build_track_filter(args=None):
-    """Reads filter params (q, artist, genre, decade, language, rated_only,
+    """Reads filter params (q, artist, album, genre, decade, language, rated_only,
     rating) and returns (where_sql, params). `args` defaults to the current
     request's query string but also accepts a plain dict, so smart playlists
     can reuse the exact same filter logic against their saved rules. genre/
@@ -3029,6 +3029,7 @@ def _build_track_filter(args=None):
 
     q = _get("q")
     artist = _get("artist")
+    album = _get("album")
     genre = _get("genre")
     decade = _get("decade")
     language = _get("language")
@@ -3054,6 +3055,9 @@ def _build_track_filter(args=None):
     if artist:
         where.append("t.artist = ?")
         params.append(artist)
+    if album:
+        where.append("t.album = ?")
+        params.append(album)
     if genre:
         values = [v for v in str(genre).split(",") if v]
         where.append(f"t.primary_genre IN ({','.join('?' * len(values))})")
@@ -3077,6 +3081,57 @@ def _build_track_filter(args=None):
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     return where_sql, params
+
+
+# ---------------------------------------------------- albums and artists --
+# Cover-grid browsing: the same filters as the track list apply (search,
+# genre, decade, ...), grouped. Clicking a card just sets the album/artist
+# filter and shows the tracks, so there's no second list implementation.
+def _grouped_browse(group_sql, select_sql, orders, default_order):
+    db = get_db()
+    where_sql, params = _build_track_filter()
+    cond = group_sql["where"]
+    where = f"{where_sql} AND {cond}" if where_sql else f"WHERE {cond}"
+    limit = min(_parse_int_arg(request.args.get("limit", 120), "limit"), 300)
+    offset = _parse_int_arg(request.args.get("offset", 0), "offset")
+    order = orders.get(request.args.get("sort", ""), orders[default_order])
+    base = f"FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id {where} GROUP BY {group_sql['by']}"
+    total = db.execute(f"SELECT COUNT(*) FROM (SELECT 1 {base})", params).fetchone()[0]
+    rows = db.execute(f"SELECT {select_sql} {base} ORDER BY {order} LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
+    return rows, total
+
+
+_ART_COLUMNS = (
+    "MIN(CASE WHEN t.has_art = 1 THEN t.id END) AS art_id, "
+    "MIN(CASE WHEN t.has_art IS NULL THEN t.id END) AS maybe_id"
+)
+
+
+@app.route("/api/albums")
+def albums_route():
+    rows, total = _grouped_browse(
+        {"where": "t.album IS NOT NULL AND t.album != ''", "by": "t.album, t.artist"},
+        f"t.album AS album, t.artist AS artist, COUNT(*) AS n, MIN(t.year) AS year, SUM(t.duration) AS duration, {_ART_COLUMNS}",
+        {
+            "artist": "LOWER(COALESCE(artist, '')), LOWER(album)",
+            "album": "LOWER(album), LOWER(COALESCE(artist, ''))",
+            "year": "year IS NULL, year DESC, LOWER(album)",
+            "count": "n DESC, LOWER(album)",
+        },
+        "artist",
+    )
+    return jsonify({"items": [dict(r) for r in rows], "total": total})
+
+
+@app.route("/api/artists")
+def artists_route():
+    rows, total = _grouped_browse(
+        {"where": "t.artist IS NOT NULL AND t.artist != ''", "by": "t.artist"},
+        f"t.artist AS artist, COUNT(*) AS n, COUNT(DISTINCT t.album) AS albums, {_ART_COLUMNS}",
+        {"name": "LOWER(artist)", "count": "n DESC, LOWER(artist)"},
+        "name",
+    )
+    return jsonify({"items": [dict(r) for r in rows], "total": total})
 
 
 @app.route("/api/track-ids")
