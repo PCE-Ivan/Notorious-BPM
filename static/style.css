@@ -2350,3 +2350,9 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; text-align: cen
 .level-btn { opacity: .55; font-size: 15px; }
 .level-btn:hover { opacity: .9; }
 .level-btn.active { opacity: 1; color: var(--accent); }
+
+/* ------------------------------------------------------- drop to import -- */
+.drop-overlay { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); pointer-events: none; }
+.drop-overlay-card { padding: 36px 48px; text-align: center; background: var(--bg-elevated); border: 2px dashed var(--accent); max-width: 80vw; }
+.drop-overlay-title { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+.drop-overlay-sub { color: var(--text-dim); font-size: 13px; }

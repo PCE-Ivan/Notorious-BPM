@@ -89,6 +89,25 @@ async function refreshActivity() {
     return;
   }
   const running = activity.jobs.filter((j) => j.running);
+  // Jobs that finished since the last tick -- judged by finished_at, not by
+  // "was running a moment ago", because a small job can start and end between
+  // two polls. The first poll only records what already finished.
+  const justEnded = [];
+  const seen = activity.seenFinished || {};
+  activity.jobs.forEach((j) => {
+    if (j.running || !j.finished_at) return;
+    if (activity.seenFinished && seen[j.name] !== j.finished_at) justEnded.push(j.name);
+    seen[j.name] = j.finished_at;
+  });
+  activity.seenFinished = seen;
+  if (justEnded.length && typeof onImportFinished === "function") {
+    // Both can land in one tick (a small import and its rescan): handle the
+    // import first, since it's what says a refresh is owed.
+    (async () => {
+      if (justEnded.includes("import")) await onImportFinished();
+      if (justEnded.includes("scan") && importAwaitingScan) onScanFinishedAfterImport();
+    })();
+  }
   const badge = el("activity-badge");
   badge.textContent = running.length;
   badge.classList.toggle("hidden", running.length === 0);

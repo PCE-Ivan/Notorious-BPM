@@ -87,5 +87,45 @@ class ChoosePortTest(unittest.TestCase):
             server.shutdown()
 
 
+class DropTest(unittest.TestCase):
+    def test_paths_come_from_pywebviews_full_path_field(self):
+        event = {"type": "drop", "dataTransfer": {"files": [
+            {"name": "a.mp3", "pywebviewFullPath": "/Users/me/a.mp3"},
+            {"name": "no-path.mp3"},                                  # pywebview couldn't resolve it
+            {"name": "Album", "pywebviewFullPath": "/Users/me/Album"},
+        ]}}
+        self.assertEqual(desktop_macos._dropped_paths(event), ["/Users/me/a.mp3", "/Users/me/Album"])
+
+    def test_malformed_events_yield_nothing(self):
+        for event in (None, {}, {"dataTransfer": None}, {"dataTransfer": {"files": None}}, {"dataTransfer": {"files": ["str"]}}):
+            self.assertEqual(desktop_macos._dropped_paths(event), [])
+
+    def test_paths_are_posted_to_the_import_route(self):
+        seen = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen["path"] = self.path
+                seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                body = b'{"started": true}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            result = desktop_macos._send_to_import(server.server_address[1], ["/a.mp3", "/b folder"])
+        finally:
+            server.shutdown()
+        self.assertEqual(result, {"started": True})
+        self.assertEqual(seen["path"], "/api/import/files")
+        self.assertEqual(seen["body"], {"paths": ["/a.mp3", "/b folder"]})
+
+
 if __name__ == "__main__":
     unittest.main()

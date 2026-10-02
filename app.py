@@ -20,11 +20,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.parse
 import urllib.request
 
-from flask import Flask, g, jsonify, request, send_file, abort, send_from_directory, make_response, Response
+from flask import Flask, g, has_app_context, jsonify, request, send_file, abort, send_from_directory, make_response, Response
 
 import audio_dupes
 import config as jukebox_config
 import health
+import importer
 import jobs
 import journal
 import loudness
@@ -241,7 +242,11 @@ def _ensure_schema():
 
 def _prepare_job():
     _ensure_schema()
-    close_db(None)
+    # Only a request-scoped connection needs closing; a job started from
+    # another job's thread (the import's follow-up scan) has no app context,
+    # and flask.g raises outside one.
+    if has_app_context():
+        close_db(None)
 
 
 def _snapshot_db():
@@ -684,6 +689,84 @@ def _existing_dup_index():
         (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"])): {"path": r["path"], "duration": r["duration"]}
         for r in db.execute("SELECT artist, title, path, duration FROM tracks").fetchall()
     }
+
+
+# --------------------------------------------------------- import music --
+# Files or folders dropped on the window (desktop_macos.py hands the native
+# paths over) or picked from the Library menu. Copies into <music>/<Artist>/,
+# skips what's already in the library, then rescans. See importer.py.
+def _import_summary(s):
+    r = s.get("result") or {}
+    parts = [f"{len(r.get('copied', []))} added"]
+    if r.get("duplicates"):
+        parts.append(f"{len(r['duplicates'])} already in your library")
+    if r.get("in_library"):
+        parts.append(f"{r['in_library']} already in the music folder")
+    if r.get("errors"):
+        parts.append(f"{len(r['errors'])} couldn't be copied")
+    return ", ".join(parts)
+
+
+_import_job = jobs.Job("import", "Adding music", summarize=_import_summary)
+_import_state = _import_job.state
+
+
+def _run_import_bg(paths):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        index = {
+            (_normalize_dup_artist(r["artist"]), _normalize_dup_title(r["title"])): {"path": r["path"], "duration": r["duration"]}
+            for r in conn.execute("SELECT artist, title, path, duration FROM tracks")
+        }
+    finally:
+        conn.close()
+    result = importer.import_files(
+        paths, MUSIC_DIR, index,
+        normalize_key=lambda artist, title: (_normalize_dup_artist(artist), _normalize_dup_title(title)),
+        progress_cb=_import_job.progress,
+    )
+    result["duplicates"] = result["duplicates"][:200]
+    result["errors"] = result["errors"][:50]
+    _import_state["result"] = result
+    if result["copied"] or result["in_library"]:
+        _snapshot_db()
+        _start_scan_bg()   # its own job in the Activity tray; the page refreshes when it finishes
+
+
+def _start_import(paths):
+    paths = [p for p in paths if isinstance(p, str) and p]
+    if not paths:
+        return jsonify({"started": False, "error": "Nothing to add."})
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
+    if not _import_job.start(_run_import_bg, paths[:5000], guard=_library_lock, prepare=_prepare_job):
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True})
+
+
+@app.route("/api/import/files", methods=["POST"])
+def import_files_route():
+    data = request.get_json(force=True, silent=True) or {}
+    paths = data.get("paths")
+    if not isinstance(paths, list):
+        return jsonify({"started": False, "error": "paths must be a list"}), 400
+    return _start_import(paths)
+
+
+@app.route("/api/import/choose", methods=["POST"])
+def import_choose_route():
+    data = request.get_json(force=True, silent=True) or {}
+    paths = _pick_music_paths_dialog("folder" if data.get("kind") == "folder" else "files")
+    if not paths:
+        return jsonify({"started": False, "cancelled": True})
+    return _start_import(paths)
+
+
+@app.route("/api/import/progress")
+def import_progress():
+    return jsonify(_import_state)
 
 
 @app.route("/api/ipod/detect")
@@ -1997,6 +2080,31 @@ def _pick_folder_dialog(prompt="Select the music folder for Notorious B.P.M. to 
     finally:
         root.destroy()
     return picked or None
+
+
+def _pick_music_paths_dialog(kind):
+    """Native picker for music to import: `kind` is "files" (audio files,
+    several at once) or "folder" (one or more folders). Returns a list of
+    paths ([] if cancelled). macOS only -- elsewhere there's no sensible
+    multi-select that doesn't need a GUI toolkit."""
+    if sys.platform != "darwin":
+        return []
+    if kind == "folder":
+        chooser = 'choose folder with prompt "Choose folders of music to add" with multiple selections allowed'
+    else:
+        chooser = 'choose file of type {"public.audio"} with prompt "Choose music to add" with multiple selections allowed'
+    script = (
+        f"set picked to {chooser}\n"
+        'set out to ""\n'
+        "repeat with f in picked\n"
+        "set out to out & POSIX path of f & linefeed\n"
+        "end repeat\n"
+        "return out"
+    )
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    if result.returncode != 0:
+        return []
+    return [line.rstrip("/") for line in result.stdout.splitlines() if line.strip()]
 
 
 def _pick_save_file_dialog(prompt, default_name):

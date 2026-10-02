@@ -257,6 +257,47 @@ def _choose_port(preferred, db_path):
     return _free_port(preferred), False
 
 
+# ---------------------------------------------------------- drag and drop --
+# Files dropped on the window. A web page never learns the real path of a file
+# dropped on it, but pywebview's DOM events do (it adds "pywebviewFullPath" to
+# each file), so the drop is caught here and handed to the local server's
+# import route -- the page itself only shows the "drop here" overlay and, via
+# the Activity tray, the progress.
+def _dropped_paths(event):
+    files = ((event or {}).get("dataTransfer") or {}).get("files") or []
+    return [f["pywebviewFullPath"] for f in files if isinstance(f, dict) and f.get("pywebviewFullPath")]
+
+
+def _send_to_import(port, paths):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/import/files",
+        data=json.dumps({"paths": paths}).encode(), headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode() or "{}")
+
+
+def _bind_file_drop(window):
+    from webview.dom import DOMEventHandler
+
+    def on_drop(event):
+        paths = _dropped_paths(event)
+        if not paths:
+            return
+        try:
+            _send_to_import(ACTIVE_PORT, paths)
+        except Exception as e:
+            print(f"Couldn't hand the dropped files to the app: {e}", file=sys.stderr)
+
+    doc = window.dom.document
+    # preventDefault on all four, or WKWebView navigates to the dropped file
+    # instead of firing "drop". The page keeps receiving the events too (no
+    # stopPropagation), which is what lets it show its overlay.
+    for name in ("dragenter", "dragstart", "dragover"):
+        getattr(doc.events, name).__iadd__(DOMEventHandler(lambda e: None, True, False))   # in-place: registers on the element
+    doc.events.drop += DOMEventHandler(on_drop, True, False)
+
+
 def main():
     global ACTIVE_PORT
     import library_manager
@@ -301,6 +342,15 @@ def main():
     )
     api._window = window
     window.events.closing += _auto_backup_on_close
+    def bind_drop():
+        # On every page load, not once: pywebview forgets its DOM handlers
+        # when the page reloads (and the listeners it injected die with the
+        # old page).
+        try:
+            _bind_file_drop(window)
+        except Exception as e:
+            print(f"Drag and drop unavailable: {e}", file=sys.stderr)
+    window.events.loaded += bind_drop
     # private_mode=False: pywebview defaults to a private/incognito-style
     # WKWebView, which doesn't persist storage across launches -- this was
     # the actual root cause of the theme resetting on relaunch (the

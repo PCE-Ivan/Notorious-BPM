@@ -73,6 +73,9 @@
               <button id="library-new" class="library-menu-item">New Library…</button>
               <button id="library-open" class="library-menu-item">Open Library…</button>
               <div class="library-menu-divider"></div>
+              <button id="library-add-files" class="library-menu-item">Add music files…</button>
+              <button id="library-add-folder" class="library-menu-item">Add a folder of music…</button>
+              <div class="library-menu-divider"></div>
               <div class="library-menu-label">Recent</div>
               <div id="library-recent-list" class="library-recent-list"></div>
             </div>
@@ -1265,10 +1268,18 @@
   </div>
 </div>
 
+<div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
+  <div class="drop-overlay-card">
+    <div class="drop-overlay-title">Drop to add to your library</div>
+    <div class="drop-overlay-sub">Files or whole folders — copied into your music folder, duplicates skipped</div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 <script src="browse.js"></script>
 <script src="keys.js"></script>
 <script src="activity.js"></script>
+<script src="import.js"></script>
 <script src="health.js"></script>
 <script src="history.js"></script>
 </body>
