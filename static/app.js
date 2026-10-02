@@ -40,7 +40,21 @@ function setTileText(btn, text) {
 // ---------------------------------------------------------------- fetch --
 async function api(path, opts) {
   const res = await fetch(API + path, opts);
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  if (!res.ok) {
+    // The server answers an unexpected failure with {"error": <readable
+    // sentence>, "kind": ...} (see app.py's error handler) -- surface that
+    // sentence instead of a bare "/path -> 500".
+    let message = `${path} -> ${res.status}`;
+    let kind = null;
+    try {
+      const body = await res.clone().json();
+      if (body && body.error) { message = body.error; kind = body.kind || null; }
+    } catch (e) { /* not JSON (e.g. a plain 404) -- keep the generic message */ }
+    const err = new Error(message);
+    err.status = res.status;
+    err.kind = kind;
+    throw err;
+  }
   return res.status === 204 ? null : res.json();
 }
 

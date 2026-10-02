@@ -23,8 +23,19 @@ import urllib.request
 from flask import Flask, g, jsonify, request, send_file, abort, send_from_directory, make_response, Response
 
 import config as jukebox_config
+import jobs
+import logging
+import logging_setup
+import system_status
+from werkzeug.exceptions import HTTPException
 from fs_safety import safe_move
 import library_manager
+
+# Before resolve_startup() on purpose: see logging_setup's own docstring --
+# a JUKEBOX_DB_PATH already set at this point is a dev/test override, and
+# the log must follow that, not the real library resolve_startup() picks.
+logging_setup.setup_logging()
+log = logging.getLogger("jukebox.app")
 
 # Must run before MUSIC_DIR/DB_PATH below are computed -- resolves which
 # library is "current" (running the one-time legacy migration the first
@@ -277,13 +288,99 @@ _library_lock = threading.Lock()
 
 
 def _any_background_job_running():
-    return any(state.get("running") for state in (
-        _scan_state, _ipod_state, _staging_fix_state, _staging_move_state,
-        _ipod_artfill_state, _organize_state, _fill_genres_state,
-        _fill_years_state, _unify_genre_state, _fix_artist_title_state,
-        _deep_scan_state, _convert_state, _dup_clean_state,
-        _delete_tracks_state, _fill_art_state, _verify_audio_state,
-    ))
+    # Every Job registers itself in jobs.REGISTRY, so a job added later is
+    # covered automatically -- the hand-maintained tuple this replaced had to
+    # be remembered (and was, once, forgotten) each time a new one appeared.
+    return jobs.any_running()
+
+
+@app.route("/api/jobs")
+def jobs_list():
+    """Activity tray: every running job plus anything finished recently."""
+    return jsonify(jobs.list_jobs())
+
+
+@app.route("/api/jobs/<name>/cancel", methods=["POST"])
+def jobs_cancel(name):
+    job = jobs.REGISTRY.get(name)
+    if not job:
+        abort(404)
+    return jsonify({"ok": job.cancel()})
+
+
+@app.route("/api/jobs/<name>/dismiss", methods=["POST"])
+def jobs_dismiss(name):
+    job = jobs.REGISTRY.get(name)
+    if not job:
+        abort(404)
+    job.dismiss()
+    return jsonify({"ok": True})
+
+
+# ------------------------------------------------- errors & diagnostics --
+
+@app.errorhandler(Exception)
+def _handle_unexpected_error(e):
+    """Anything that escapes a route used to become Flask's bare HTML
+    "500 Internal Server Error" -- no log, no explanation (that's exactly
+    how a macOS folder-permission block looked). Logged with its traceback
+    and returned as JSON the front end can show as readable text."""
+    if isinstance(e, HTTPException):
+        return e
+    log.exception("Unhandled error on %s %s", request.method, request.path)
+    kind, message = system_status.describe_exception(e, DB_PATH, MUSIC_DIR)
+    return jsonify({"ok": False, "error": message, "kind": kind}), 500
+
+
+@app.route("/api/system/status")
+def system_status_route():
+    problems = system_status.library_problems(DB_PATH, MUSIC_DIR)
+    return jsonify({"ok": not problems, "problems": problems})
+
+
+@app.route("/api/system/open-privacy-settings", methods=["POST"])
+def system_open_privacy_settings():
+    return jsonify({"ok": system_status.open_privacy_settings()})
+
+
+@app.route("/api/system/reveal-log", methods=["POST"])
+def system_reveal_log():
+    path = logging_setup.log_path()
+    if not path or not os.path.isfile(path):
+        return jsonify({"ok": False, "error": "No log file yet"})
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-R", path])
+    return jsonify({"ok": True, "path": path})
+
+
+@app.route("/api/diagnostics")
+def diagnostics():
+    """Everything worth pasting into a bug report, in one place."""
+    def redact(cfg):
+        return {
+            k: ("(set)" if v else "(empty)") if any(w in k.lower() for w in ("key", "token", "secret")) else v
+            for k, v in cfg.items()
+        }
+
+    try:
+        track_count = get_db().execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    except Exception as e:
+        track_count = f"unavailable ({e.__class__.__name__})"
+    info = {
+        "platform": sys.platform,
+        "python": sys.version.split()[0],
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "library": DB_PATH, "music_dir": MUSIC_DIR,
+        "art_cache": ART_CACHE_DIR, "trash": TRASH_DIR, "backups": BACKUP_DIR,
+        "tracks": track_count,
+        "tools": {"ffmpeg": _find_binary("ffmpeg"), "fpcalc": _find_binary("fpcalc")},
+        "config": redact(jukebox_config.load_config()),
+        "problems": system_status.library_problems(DB_PATH, MUSIC_DIR),
+        "jobs": jobs.list_jobs(),
+        "log_file": logging_setup.log_path(),
+    }
+    lines = [f"{k}: {v}" for k, v in info.items()]
+    return jsonify({"info": info, "text": "\n".join(lines) + "\n\n--- recent log ---\n" + logging_setup.tail(20000)})
 
 
 # Shared by /api/rescan and /api/choose-folder -- both ultimately just run
@@ -294,30 +391,28 @@ def _any_background_job_running():
 # this, during which the UI had no way to distinguish "still working" from
 # "hung" -- there was no progress endpoint to poll, unlike fill-genres/
 # fill-years/duplicate-cleanup, which already use this exact pattern.
-_scan_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
-_scan_lock = threading.Lock()
+_scan_job = jobs.Job(
+    "scan", "Scanning library",
+    summarize=lambda s: "{n} new, {u} updated, {r} removed".format(
+        n=(s["result"] or {}).get("inserted", 0), u=(s["result"] or {}).get("updated", 0),
+        r=(s["result"] or {}).get("removed", 0)),
+)
+_scan_state = _scan_job.state
 
 
 def _run_scan_bg(force_prune=False):
-    def progress_cb(done, total):
-        _scan_state["done"] = done
-        _scan_state["total"] = total
-
     try:
         import importlib
         import scan_library
         importlib.reload(scan_library)
-        stats = scan_library.scan(progress_cb=progress_cb, force_prune=force_prune)
+        stats = scan_library.scan(progress_cb=_scan_job.progress, force_prune=force_prune)
         _scan_state["result"] = stats
         # Recorded on every successful scan regardless of trigger (Rescan
         # button, Choose Folder, or the iPod import's chained rescan) --
         # read back by /api/last-scan so a caller can skip a redundant
         # whole-library rescan it doesn't actually need right now.
         jukebox_config.update_config(lambda cfg: cfg.__setitem__("last_scan_at", datetime.datetime.utcnow().isoformat()))
-    except Exception as e:
-        _scan_state["error"] = str(e)
     finally:
-        _scan_state["running"] = False
         _invalidate_dup_plan_cache()
 
 
@@ -325,13 +420,7 @@ def _start_scan_bg(force_prune=False):
     """Returns False (and starts nothing) if a scan is already running --
     same "already running" convention as fill-genres/fill-years, not an
     error, just something the caller can tell the user."""
-    with _library_lock, _scan_lock:
-        if _scan_state["running"]:
-            return False
-        _scan_state.update(running=True, done=0, total=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_scan_bg, args=(force_prune,), daemon=True).start()
-        return True
+    return _scan_job.start(_run_scan_bg, force_prune, guard=_library_lock, prepare=lambda: close_db(None))
 
 
 @app.route("/api/rescan", methods=["POST"])
@@ -378,48 +467,37 @@ def last_scan():
 # mount as a plain disk and store ordinary DRM-free audio files; an iPod
 # Touch exposes no such filesystem. See ipod_import.py for how a track's
 # real name is recovered from the iPod's own iTunesDB.
-_ipod_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None, "ipod_name": None}
-_ipod_lock = threading.Lock()
+_ipod_job = jobs.Job("ipod_import", "Importing from iPod", ipod_name=None)
+_ipod_state = _ipod_job.state
 
 
 def _run_ipod_import_bg(mount, ipod_name, staging_root, existing_index):
-    def progress_cb(done, total):
-        _ipod_state["done"] = done
-        _ipod_state["total"] = total
-
-    try:
-        # No importlib.reload here (unlike scan/organize above) -- reloading
-        # this specific module (the one that also imports organize_by_artist)
-        # deadlocks in the packaged/frozen build specifically, verified
-        # against a real device: the process sits at 0% CPU indefinitely,
-        # not slow, genuinely stuck. Reload only ever existed so editing
-        # this file didn't need an app restart during development; a
-        # shipped, frozen build's code never changes at runtime anyway, so
-        # a plain import (returning the already-loaded module) loses
-        # nothing real here.
-        import ipod_import
-        stats = ipod_import.import_tracks(
-            mount, staging_root, MUSIC_DIR, existing_index=existing_index,
-            normalize_key=lambda artist, title: (_normalize_dup_artist(artist), _normalize_dup_title(title)),
-            progress_cb=progress_cb,
-        )
-        stats["ipod_name"] = ipod_name
-        stats["staging_path"] = staging_root
-        _ipod_state["result"] = stats
-    except Exception as e:
-        _ipod_state["error"] = str(e)
-    finally:
-        _ipod_state["running"] = False
+    # No importlib.reload here (unlike scan/organize above) -- reloading
+    # this specific module (the one that also imports organize_by_artist)
+    # deadlocks in the packaged/frozen build specifically, verified
+    # against a real device: the process sits at 0% CPU indefinitely,
+    # not slow, genuinely stuck. Reload only ever existed so editing
+    # this file didn't need an app restart during development; a
+    # shipped, frozen build's code never changes at runtime anyway, so
+    # a plain import (returning the already-loaded module) loses
+    # nothing real here.
+    import ipod_import
+    stats = ipod_import.import_tracks(
+        mount, staging_root, MUSIC_DIR, existing_index=existing_index,
+        normalize_key=lambda artist, title: (_normalize_dup_artist(artist), _normalize_dup_title(title)),
+        progress_cb=_ipod_job.progress,
+    )
+    stats["ipod_name"] = ipod_name
+    stats["staging_path"] = staging_root
+    _ipod_state["result"] = stats
 
 
 def _start_ipod_import_bg(mount, ipod_name, staging_root, existing_index):
     """Same "already running" convention as the scan/organize jobs above."""
-    with _library_lock, _ipod_lock:
-        if _ipod_state["running"]:
-            return False
-        _ipod_state.update(running=True, done=0, total=0, result=None, error=None, ipod_name=ipod_name)
-        threading.Thread(target=_run_ipod_import_bg, args=(mount, ipod_name, staging_root, existing_index), daemon=True).start()
-        return True
+    return _ipod_job.start(
+        _run_ipod_import_bg, mount, ipod_name, staging_root, existing_index,
+        guard=_library_lock, ipod_name=ipod_name,
+    )
 
 
 def _existing_dup_index():
@@ -588,8 +666,8 @@ def ipod_staging_reveal():
 # One shared async-job shape for the three in-place staging fixes (names/
 # tags/art) -- parameterized on which ipod_import function to run, rather
 # than copy-pasting the same thread-launcher three times.
-_staging_fix_state = {"running": False, "action": None, "done": 0, "total": 0, "result": None, "error": None}
-_staging_fix_lock = threading.Lock()
+_staging_fix_job = jobs.Job("staging_fix", "Fixing staged tracks", action=None)
+_staging_fix_state = _staging_fix_job.state
 
 _STAGING_FIX_FUNCS = {
     "names": "fix_staged_names",
@@ -599,18 +677,9 @@ _STAGING_FIX_FUNCS = {
 
 
 def _run_staging_fix_bg(action, staging_root):
-    def progress_cb(done, total):
-        _staging_fix_state["done"] = done
-        _staging_fix_state["total"] = total
-
-    try:
-        import ipod_import
-        func = getattr(ipod_import, _STAGING_FIX_FUNCS[action])
-        _staging_fix_state["result"] = func(staging_root, progress_cb=progress_cb)
-    except Exception as e:
-        _staging_fix_state["error"] = str(e)
-    finally:
-        _staging_fix_state["running"] = False
+    import ipod_import
+    func = getattr(ipod_import, _STAGING_FIX_FUNCS[action])
+    _staging_fix_state["result"] = func(staging_root, progress_cb=_staging_fix_job.progress)
 
 
 @app.route("/api/ipod/staging/fix", methods=["POST"])
@@ -622,12 +691,10 @@ def ipod_staging_fix():
     _name, staging_root = _resolve_staging_root(data.get("ipod_name"))
     if not staging_root or not os.path.isdir(staging_root):
         return jsonify({"started": False, "error": "No staged import to fix"})
-    with _library_lock, _staging_fix_lock:
-        if _staging_fix_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _staging_fix_state.update(running=True, action=action, done=0, total=0, result=None, error=None)
-        threading.Thread(target=_run_staging_fix_bg, args=(action, staging_root), daemon=True).start()
-        return jsonify({"started": True, "error": None})
+    started = _staging_fix_job.start(_run_staging_fix_bg, action, staging_root, guard=_library_lock, action=action)
+    if not started:
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True, "error": None})
 
 
 @app.route("/api/ipod/staging/fix-progress")
@@ -642,14 +709,14 @@ def ipod_staging_fix_progress():
 # checking against the real library happens here, at move time, purely to
 # report -- see ipod_import.move_staged_to_library's own docstring for why
 # nothing gets held back or skipped over it.
-_staging_move_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
-_staging_move_lock = threading.Lock()
+# Not cancellable: a half-moved batch would leave staged and library copies
+# both half-present, and this step's chained rescan expects a finished move.
+_staging_move_job = jobs.Job("staging_move", "Moving staged tracks into library", cancellable=False)
+_staging_move_state = _staging_move_job.state
 
 
 def _run_staging_move_bg(staging_root):
-    def progress_cb(done, total):
-        _staging_move_state["done"] = done
-        _staging_move_state["total"] = total
+    progress_cb = _staging_move_job.progress
 
     try:
         import ipod_import
@@ -666,6 +733,7 @@ def _run_staging_move_bg(staging_root):
         )
         _staging_move_state["result"] = result
     except Exception as e:
+        log.exception("Staging move failed")
         _staging_move_state["error"] = str(e)
     finally:
         # Gated on `total`, not the moved count, for the same reason the old
@@ -683,7 +751,6 @@ def _run_staging_move_bg(staging_root):
                 _snapshot_db()
                 _start_scan_bg()
         _ipod_state["ipod_name"] = None
-        _staging_move_state["running"] = False
 
 
 @app.route("/api/ipod/staging/move", methods=["POST"])
@@ -692,12 +759,9 @@ def ipod_staging_move():
     _name, staging_root = _resolve_staging_root(data.get("ipod_name"))
     if not staging_root or not os.path.isdir(staging_root):
         return jsonify({"started": False, "error": "No staged import to move"})
-    with _library_lock, _staging_move_lock:
-        if _staging_move_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _staging_move_state.update(running=True, done=0, total=0, result=None, error=None)
-        threading.Thread(target=_run_staging_move_bg, args=(staging_root,), daemon=True).start()
-        return jsonify({"started": True, "error": None})
+    if not _staging_move_job.start(_run_staging_move_bg, staging_root, guard=_library_lock):
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True, "error": None})
 
 
 @app.route("/api/ipod/staging/move-progress")
@@ -714,81 +778,73 @@ def ipod_staging_move_progress():
 # _fetch_and_cache_art mechanism as the per-track "Fetch cover art" button,
 # just applied in bulk with the same rate-limiting fill_genres.py already
 # uses for the same API.
-_ipod_artfill_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
-_ipod_artfill_lock = threading.Lock()
+_ipod_artfill_job = jobs.Job("ipod_artfill", "Fetching cover art for imported tracks")
+_ipod_artfill_state = _ipod_artfill_job.state
 
 
 def _run_ipod_artfill_bg(rel_paths):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = []
-            if rel_paths:
-                # Not a plain "WHERE path IN (...)" -- rel_paths comes from
-                # move_staged_to_library, built from artist/title *tag*
-                # text (normally NFC-composed, e.g. accented characters as
-                # one codepoint), while the tracks.path this scan just
-                # wrote comes from os.walk() on macOS's default filesystem,
-                # which hands back names NFD-decomposed instead (the same
-                # characters as base letter + separate combining accent).
-                # Visually and case-insensitively identical, but a byte-for-
-                # byte SQL match on the raw strings misses every accented
-                # path -- confirmed against a real import where every
-                # accented track's has_art silently stayed unset. Comparing
-                # NFC-normalized forms in Python instead of in SQL makes
-                # this correct regardless of which form either side is in.
-                targets = {unicodedata.normalize("NFC", p) for p in rel_paths}
-                rows = [
-                    r for r in conn.execute("SELECT id, path, artist, title FROM tracks").fetchall()
-                    if unicodedata.normalize("NFC", r["path"]) in targets
-                ]
+        rows = []
+        if rel_paths:
+            # Not a plain "WHERE path IN (...)" -- rel_paths comes from
+            # move_staged_to_library, built from artist/title *tag*
+            # text (normally NFC-composed, e.g. accented characters as
+            # one codepoint), while the tracks.path this scan just
+            # wrote comes from os.walk() on macOS's default filesystem,
+            # which hands back names NFD-decomposed instead (the same
+            # characters as base letter + separate combining accent).
+            # Visually and case-insensitively identical, but a byte-for-
+            # byte SQL match on the raw strings misses every accented
+            # path -- confirmed against a real import where every
+            # accented track's has_art silently stayed unset. Comparing
+            # NFC-normalized forms in Python instead of in SQL makes
+            # this correct regardless of which form either side is in.
+            targets = {unicodedata.normalize("NFC", p) for p in rel_paths}
+            rows = [
+                r for r in conn.execute("SELECT id, path, artist, title FROM tracks").fetchall()
+                if unicodedata.normalize("NFC", r["path"]) in targets
+            ]
 
-            needs_art = []
-            for row in rows:
-                fpath = os.path.join(MUSIC_DIR, row["path"])
-                has_artist, has_title, has_art = (
-                    _read_raw_tag_presence(fpath) if os.path.isfile(fpath) else (True, True, True)
-                )
-                conn.execute(
-                    "UPDATE tracks SET has_artist_tag=?, has_title_tag=?, has_art=? WHERE id=?",
-                    (int(has_artist), int(has_title), int(has_art), row["id"]),
-                )
-                if not has_art:
-                    needs_art.append(row)
-            conn.commit()
+        needs_art = []
+        for row in rows:
+            fpath = os.path.join(MUSIC_DIR, row["path"])
+            has_artist, has_title, has_art = (
+                _read_raw_tag_presence(fpath) if os.path.isfile(fpath) else (True, True, True)
+            )
+            conn.execute(
+                "UPDATE tracks SET has_artist_tag=?, has_title_tag=?, has_art=? WHERE id=?",
+                (int(has_artist), int(has_title), int(has_art), row["id"]),
+            )
+            if not has_art:
+                needs_art.append(row)
+        conn.commit()
 
-            fetched = 0
-            total = len(needs_art)
-            _ipod_artfill_state["total"] = total
-            for i, row in enumerate(needs_art):
-                try:
-                    ok, _err = _fetch_and_cache_art(conn, row["id"], row["artist"], row["title"])
-                    if ok:
-                        fetched += 1
-                except Exception:
-                    pass
-                _ipod_artfill_state["done"] = i + 1
-                time.sleep(0.15)  # be polite to Deezer's public API -- see fill_genres.py
-            _ipod_artfill_state["result"] = {"checked": len(rows), "needed_art": total, "fetched": fetched}
-        finally:
-            conn.close()
-    except Exception as e:
-        _ipod_artfill_state["error"] = str(e)
+        fetched = 0
+        total = len(needs_art)
+        _ipod_artfill_job.set(total=total)
+        for i, row in enumerate(needs_art):
+            try:
+                ok, _err = _fetch_and_cache_art(conn, row["id"], row["artist"], row["title"])
+                if ok:
+                    fetched += 1
+            except Exception:
+                pass
+            _ipod_artfill_job.progress(i + 1, total)
+            time.sleep(0.15)  # be polite to Deezer's public API -- see fill_genres.py
+        _ipod_artfill_state["result"] = {"checked": len(rows), "needed_art": total, "fetched": fetched}
     finally:
-        _ipod_artfill_state["running"] = False
+        conn.close()
 
 
 @app.route("/api/ipod/backfill-art", methods=["POST"])
 def ipod_backfill_art():
     data = request.get_json(force=True, silent=True) or {}
     rel_paths = data.get("paths") or []
-    with _library_lock, _ipod_artfill_lock:
-        if _ipod_artfill_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _ipod_artfill_state.update(running=True, done=0, total=0, result=None, error=None)
-        threading.Thread(target=_run_ipod_artfill_bg, args=(rel_paths,), daemon=True).start()
-        return jsonify({"started": True, "error": None})
+    if not _ipod_artfill_job.start(_run_ipod_artfill_bg, rel_paths, guard=_library_lock):
+        return jsonify({"started": False, "error": "Already running"})
+    return jsonify({"started": True, "error": None})
 
 
 @app.route("/api/ipod/backfill-art-progress")
@@ -799,74 +855,64 @@ def ipod_backfill_art_progress():
 # Same async-job-with-progress-polling shape as the scan above: moving
 # thousands of files into per-artist folders is exactly the kind of thing
 # that can take minutes and must never block a request while it runs.
-_organize_state = {"running": False, "done": 0, "total": 0, "moved": 0, "result": None, "error": None}
-_organize_lock = threading.Lock()
+# Not cancellable: organize() hands back the whole old->new path map only when
+# it finishes, and the library index is repointed from that afterwards --
+# stopping partway would leave files moved on disk with the index still
+# pointing at their old paths.
+_organize_job = jobs.Job("organize", "Organizing by artist", cancellable=False, progress_extra="moved", moved=0)
+_organize_state = _organize_job.state
 
 
 def _run_organize_bg():
-    def progress_cb(done, total, moved):
-        _organize_state["done"] = done
-        _organize_state["total"] = total
-        _organize_state["moved"] = moved
+    progress_cb = _organize_job.progress
 
-    try:
-        import importlib
-        import organize_by_artist
-        importlib.reload(organize_by_artist)
-        stats = organize_by_artist.organize(progress_cb=progress_cb)
+    import importlib
+    import organize_by_artist
+    importlib.reload(organize_by_artist)
+    stats = organize_by_artist.organize(progress_cb=progress_cb)
 
-        # Files physically moved -- repoint the existing tracks.path rows at
-        # their new location instead of leaving the DB pointing at paths
-        # that no longer exist. Done by path (not a full rescan) so track
-        # ids, ratings, and playlist membership all survive the move
-        # untouched; a rescan here would instead delete+reinsert every
-        # moved track under a new id and silently drop its rating.
-        path_moves = stats.pop("path_moves", {})
-        if path_moves:
-            # The files are already moved on disk at this point -- losing
-            # this update would leave the DB pointing at paths that no
-            # longer exist (and a later rescan "fixing" that would delete +
-            # reinsert every one of these tracks under a new id, dropping
-            # its rating right back out). A transient sqlite lock from a
-            # concurrent request is exactly the kind of failure worth
-            # retrying rather than accepting silently.
-            last_err = None
-            for attempt in range(5):
-                try:
-                    conn = sqlite3.connect(DB_PATH, timeout=30)
-                    conn.execute("PRAGMA busy_timeout = 30000")
-                    conn.executemany(
-                        "UPDATE tracks SET path=? WHERE path=?",
-                        [(new, old) for old, new in path_moves.items()],
-                    )
-                    conn.commit()
-                    conn.close()
-                    last_err = None
-                    break
-                except sqlite3.Error as e:
-                    last_err = e
-                    time.sleep(0.5 * (attempt + 1))
-            if last_err:
-                raise RuntimeError(
-                    f"Files were moved on disk, but updating the library index failed "
-                    f"({last_err}). Run Rescan to re-sync the library."
+    # Files physically moved -- repoint the existing tracks.path rows at
+    # their new location instead of leaving the DB pointing at paths
+    # that no longer exist. Done by path (not a full rescan) so track
+    # ids, ratings, and playlist membership all survive the move
+    # untouched; a rescan here would instead delete+reinsert every
+    # moved track under a new id and silently drop its rating.
+    path_moves = stats.pop("path_moves", {})
+    if path_moves:
+        # The files are already moved on disk at this point -- losing
+        # this update would leave the DB pointing at paths that no
+        # longer exist (and a later rescan "fixing" that would delete +
+        # reinsert every one of these tracks under a new id, dropping
+        # its rating right back out). A transient sqlite lock from a
+        # concurrent request is exactly the kind of failure worth
+        # retrying rather than accepting silently.
+        last_err = None
+        for attempt in range(5):
+            try:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                conn.execute("PRAGMA busy_timeout = 30000")
+                conn.executemany(
+                    "UPDATE tracks SET path=? WHERE path=?",
+                    [(new, old) for old, new in path_moves.items()],
                 )
+                conn.commit()
+                conn.close()
+                last_err = None
+                break
+            except sqlite3.Error as e:
+                last_err = e
+                time.sleep(0.5 * (attempt + 1))
+        if last_err:
+            raise RuntimeError(
+                f"Files were moved on disk, but updating the library index failed "
+                f"({last_err}). Run Rescan to re-sync the library."
+            )
 
-        _organize_state["result"] = stats
-    except Exception as e:
-        _organize_state["error"] = str(e)
-    finally:
-        _organize_state["running"] = False
+    _organize_state["result"] = stats
 
 
 def _start_organize_bg():
-    with _library_lock, _organize_lock:
-        if _organize_state["running"]:
-            return False
-        _organize_state.update(running=True, done=0, total=0, moved=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_organize_bg, daemon=True).start()
-        return True
+    return _organize_job.start(_run_organize_bg, guard=_library_lock, prepare=lambda: close_db(None))
 
 
 @app.route("/api/organize-by-artist", methods=["POST"])
@@ -881,26 +927,15 @@ def organize_progress():
     return jsonify(_organize_state)
 
 
-_fill_genres_state = {"running": False, "done": 0, "total": 0, "found": 0, "result": None, "error": None}
-_fill_genres_lock = threading.Lock()
+_fill_genres_job = jobs.Job("fill_genres", "Filling missing genres", progress_extra="found", found=0)
+_fill_genres_state = _fill_genres_job.state
 
 
 def _run_fill_genres_bg():
-    def progress_cb(done, total, found):
-        _fill_genres_state["done"] = done
-        _fill_genres_state["total"] = total
-        _fill_genres_state["found"] = found
-
-    try:
-        import importlib
-        import fill_genres
-        importlib.reload(fill_genres)
-        stats = fill_genres.fill_missing_genres(progress_cb=progress_cb)
-        _fill_genres_state["result"] = stats
-    except Exception as e:
-        _fill_genres_state["error"] = str(e)
-    finally:
-        _fill_genres_state["running"] = False
+    import importlib
+    import fill_genres
+    importlib.reload(fill_genres)
+    _fill_genres_state["result"] = fill_genres.fill_missing_genres(progress_cb=_fill_genres_job.progress)
 
 
 @app.route("/api/fill-genres", methods=["POST"])
@@ -908,12 +943,8 @@ def fill_genres_route():
     # 200 either way (not a 409) -- "already running" is an expected,
     # normal outcome for the frontend to branch on, not a request failure,
     # and the shared api() helper throws on any non-2xx response.
-    with _library_lock, _fill_genres_lock:
-        if _fill_genres_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _fill_genres_state.update(running=True, done=0, total=0, found=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_fill_genres_bg, daemon=True).start()
+    if not _fill_genres_job.start(_run_fill_genres_bg, guard=_library_lock, prepare=lambda: close_db(None)):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
 
@@ -922,27 +953,16 @@ def fill_genres_progress():
     return jsonify(_fill_genres_state)
 
 
-_fill_years_state = {"running": False, "done": 0, "total": 0, "updated": 0, "result": None, "error": None}
-_fill_years_lock = threading.Lock()
+_fill_years_job = jobs.Job("fill_years", "Fixing release years", progress_extra="updated", updated=0)
+_fill_years_state = _fill_years_job.state
 
 
 def _run_fill_years_bg(track_ids):
-    def progress_cb(done, total, updated):
-        _fill_years_state["done"] = done
-        _fill_years_state["total"] = total
-        _fill_years_state["updated"] = updated
-
-    try:
-        import importlib
-        import fill_years
-        importlib.reload(fill_years)
-        _snapshot_db()
-        stats = fill_years.fix_release_years(progress_cb=progress_cb, track_ids=track_ids)
-        _fill_years_state["result"] = stats
-    except Exception as e:
-        _fill_years_state["error"] = str(e)
-    finally:
-        _fill_years_state["running"] = False
+    import importlib
+    import fill_years
+    importlib.reload(fill_years)
+    _snapshot_db()
+    _fill_years_state["result"] = fill_years.fix_release_years(progress_cb=_fill_years_job.progress, track_ids=track_ids)
 
 
 @app.route("/api/fill-years", methods=["POST"])
@@ -952,12 +972,8 @@ def fill_years_route():
     view); omit it to run across the whole library."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
-    with _library_lock, _fill_years_lock:
-        if _fill_years_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _fill_years_state.update(running=True, done=0, total=0, updated=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_fill_years_bg, args=(track_ids,), daemon=True).start()
+    if not _fill_years_job.start(_run_fill_years_bg, track_ids, guard=_library_lock, prepare=lambda: close_db(None)):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
 
@@ -966,45 +982,41 @@ def fill_years_progress():
     return jsonify(_fill_years_state)
 
 
-_fill_art_state = {"running": False, "done": 0, "total": 0, "fixed": 0, "result": None, "error": None}
-_fill_art_lock = threading.Lock()
+_fill_art_job = jobs.Job(
+    "fill_art", "Finding cover art", progress_extra="fixed", fixed=0,
+    summarize=lambda s: "found art for {f} of {c} tracks".format(
+        f=(s["result"] or {}).get("fixed", 0), c=(s["result"] or {}).get("checked", 0)),
+)
+_fill_art_state = _fill_art_job.state
 
 
 def _run_fill_art_bg(track_ids):
-    def progress_cb(done, total, fixed):
-        _fill_art_state["done"] = done
-        _fill_art_state["total"] = total
-        _fill_art_state["fixed"] = fixed
+    progress_cb = _fill_art_job.progress
 
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        try:
-            if track_ids:
-                placeholders = ",".join("?" * len(track_ids))
-                rows = conn.execute(
-                    f"SELECT id, artist, title FROM tracks WHERE has_art=0 AND id IN ({placeholders})", track_ids,
-                ).fetchall()
-            else:
-                rows = conn.execute("SELECT id, artist, title FROM tracks WHERE has_art=0").fetchall()
-            total = len(rows)
-            fixed = 0
-            for i, row in enumerate(rows):
-                try:
-                    ok, _err = _fetch_and_cache_art(conn, row["id"], row["artist"], row["title"])
-                    if ok:
-                        fixed += 1
-                except Exception:
-                    pass
-                progress_cb(i + 1, total, fixed)
-                time.sleep(0.15)  # be polite to the free APIs in art_lookup.py
-            _fill_art_state["result"] = {"checked": total, "fixed": fixed}
-        finally:
-            conn.close()
-    except Exception as e:
-        _fill_art_state["error"] = str(e)
+        if track_ids:
+            placeholders = ",".join("?" * len(track_ids))
+            rows = conn.execute(
+                f"SELECT id, artist, title FROM tracks WHERE has_art=0 AND id IN ({placeholders})", track_ids,
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT id, artist, title FROM tracks WHERE has_art=0").fetchall()
+        total = len(rows)
+        fixed = 0
+        for i, row in enumerate(rows):
+            try:
+                ok, _err = _fetch_and_cache_art(conn, row["id"], row["artist"], row["title"])
+                if ok:
+                    fixed += 1
+            except Exception:
+                pass
+            progress_cb(i + 1, total, fixed)
+            time.sleep(0.15)  # be polite to the free APIs in art_lookup.py
+        _fill_art_state["result"] = {"checked": total, "fixed": fixed}
     finally:
-        _fill_art_state["running"] = False
+        conn.close()
 
 
 @app.route("/api/fill-art", methods=["POST"])
@@ -1016,12 +1028,8 @@ def fill_art_route():
     the whole library."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
-    with _library_lock, _fill_art_lock:
-        if _fill_art_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _fill_art_state.update(running=True, done=0, total=0, fixed=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_fill_art_bg, args=(track_ids,), daemon=True).start()
+    if not _fill_art_job.start(_run_fill_art_bg, track_ids, guard=_library_lock, prepare=lambda: close_db(None)):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
 
@@ -1030,26 +1038,15 @@ def fill_art_progress():
     return jsonify(_fill_art_state)
 
 
-_unify_genre_state = {"running": False, "done": 0, "total": 0, "updated": 0, "result": None, "error": None}
-_unify_genre_lock = threading.Lock()
+_unify_genre_job = jobs.Job("unify_genre", "Unifying genre per artist", progress_extra="updated", updated=0)
+_unify_genre_state = _unify_genre_job.state
 
 
 def _run_unify_genre_bg():
-    def progress_cb(done, total, updated):
-        _unify_genre_state["done"] = done
-        _unify_genre_state["total"] = total
-        _unify_genre_state["updated"] = updated
-
-    try:
-        import importlib
-        import unify_artist_genre
-        importlib.reload(unify_artist_genre)
-        stats = unify_artist_genre.unify_artist_genres(progress_cb=progress_cb)
-        _unify_genre_state["result"] = stats
-    except Exception as e:
-        _unify_genre_state["error"] = str(e)
-    finally:
-        _unify_genre_state["running"] = False
+    import importlib
+    import unify_artist_genre
+    importlib.reload(unify_artist_genre)
+    _unify_genre_state["result"] = unify_artist_genre.unify_artist_genres(progress_cb=_unify_genre_job.progress)
 
 
 @app.route("/api/unify-artist-genre/preview")
@@ -1066,13 +1063,11 @@ def unify_artist_genre_preview():
 def unify_artist_genre_route():
     """For every artist with more than one genre across their tracks, picks
     the most common one and writes it into every track by that artist."""
-    with _library_lock, _unify_genre_lock:
-        if _unify_genre_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _snapshot_db()
-        _unify_genre_state.update(running=True, done=0, total=0, updated=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_unify_genre_bg, daemon=True).start()
+    if not _unify_genre_job.start(
+        _run_unify_genre_bg, guard=_library_lock,
+        prepare=lambda: (_snapshot_db(), close_db(None)),
+    ):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
 
@@ -1081,26 +1076,15 @@ def unify_artist_genre_progress():
     return jsonify(_unify_genre_state)
 
 
-_fix_artist_title_state = {"running": False, "done": 0, "total": 0, "updated": 0, "result": None, "error": None}
-_fix_artist_title_lock = threading.Lock()
+_fix_artist_title_job = jobs.Job("fix_artist_title", "Correcting artist & track names", progress_extra="updated", updated=0)
+_fix_artist_title_state = _fix_artist_title_job.state
 
 
 def _run_fix_artist_title_bg():
-    def progress_cb(done, total, updated):
-        _fix_artist_title_state["done"] = done
-        _fix_artist_title_state["total"] = total
-        _fix_artist_title_state["updated"] = updated
-
-    try:
-        import importlib
-        import fix_artist_title
-        importlib.reload(fix_artist_title)
-        stats = fix_artist_title.fix_artist_title(progress_cb=progress_cb)
-        _fix_artist_title_state["result"] = stats
-    except Exception as e:
-        _fix_artist_title_state["error"] = str(e)
-    finally:
-        _fix_artist_title_state["running"] = False
+    import importlib
+    import fix_artist_title
+    importlib.reload(fix_artist_title)
+    _fix_artist_title_state["result"] = fix_artist_title.fix_artist_title(progress_cb=_fix_artist_title_job.progress)
 
 
 @app.route("/api/fix-artist-title/preview")
@@ -1118,13 +1102,11 @@ def fix_artist_title_route():
     """Corrects artist/title spelling and capitalization toward Deezer's
     catalog, Picard-style -- see fix_artist_title.py for exactly what is
     and isn't considered safe to auto-correct."""
-    with _library_lock, _fix_artist_title_lock:
-        if _fix_artist_title_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _snapshot_db()
-        _fix_artist_title_state.update(running=True, done=0, total=0, updated=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_fix_artist_title_bg, daemon=True).start()
+    if not _fix_artist_title_job.start(
+        _run_fix_artist_title_bg, guard=_library_lock,
+        prepare=lambda: (_snapshot_db(), close_db(None)),
+    ):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
 
@@ -1141,61 +1123,54 @@ def fix_artist_title_progress():
 # same review-before-acting shape as the Duplicates panel's own
 # groups_skipped list, and it reuses /api/tags/<id> (already writes both
 # file and index) for the actual fix once someone accepts one.
-_verify_audio_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
-_verify_audio_lock = threading.Lock()
+_verify_audio_job = jobs.Job("verify_audio", "Verifying tags against audio")
+_verify_audio_state = _verify_audio_job.state
 
 
 def _run_verify_audio_bg(track_ids):
-    def progress_cb(done, total):
-        _verify_audio_state["done"] = done
-        _verify_audio_state["total"] = total
+    progress_cb = _verify_audio_job.progress
 
+    fpcalc_path = _find_binary("fpcalc")
+    if not fpcalc_path:
+        raise RuntimeError("fpcalc_missing")
+    api_key = (jukebox_config.load_config().get("acoustidApiKey") or "").strip()
+    if not api_key:
+        raise RuntimeError("no_api_key")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        fpcalc_path = _find_binary("fpcalc")
-        if not fpcalc_path:
-            raise RuntimeError("fpcalc_missing")
-        api_key = (jukebox_config.load_config().get("acoustidApiKey") or "").strip()
-        if not api_key:
-            raise RuntimeError("no_api_key")
-
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        try:
-            if track_ids:
-                placeholders = ",".join("?" * len(track_ids))
-                rows = conn.execute(
-                    f"SELECT id, path, artist, title FROM tracks WHERE id IN ({placeholders})", track_ids,
-                ).fetchall()
-            else:
-                rows = conn.execute("SELECT id, path, artist, title FROM tracks").fetchall()
-        finally:
-            conn.close()
-
-        total = len(rows)
-        mismatches = []
-        checked = 0
-        errors = 0
-        for i, row in enumerate(rows):
-            fpath = os.path.join(MUSIC_DIR, row["path"])
-            if os.path.isfile(fpath):
-                try:
-                    found_artist, found_title, score = _fingerprint_lookup(fpath, api_key, fpcalc_path)
-                    checked += 1
-                    if found_title is not None and _tags_look_mismatched(row["artist"], row["title"], found_artist, found_title):
-                        mismatches.append({
-                            "id": row["id"], "score": score,
-                            "current_artist": row["artist"], "current_title": row["title"],
-                            "found_artist": found_artist, "found_title": found_title,
-                        })
-                except Exception:
-                    errors += 1
-            progress_cb(i + 1, total)
-            time.sleep(0.35)  # AcoustID asks for at most ~3 requests/second per API key
-        _verify_audio_state["result"] = {"checked": checked, "errors": errors, "mismatches": mismatches}
-    except Exception as e:
-        _verify_audio_state["error"] = str(e)
+        if track_ids:
+            placeholders = ",".join("?" * len(track_ids))
+            rows = conn.execute(
+                f"SELECT id, path, artist, title FROM tracks WHERE id IN ({placeholders})", track_ids,
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT id, path, artist, title FROM tracks").fetchall()
     finally:
-        _verify_audio_state["running"] = False
+        conn.close()
+
+    total = len(rows)
+    mismatches = []
+    checked = 0
+    errors = 0
+    for i, row in enumerate(rows):
+        fpath = os.path.join(MUSIC_DIR, row["path"])
+        if os.path.isfile(fpath):
+            try:
+                found_artist, found_title, score = _fingerprint_lookup(fpath, api_key, fpcalc_path)
+                checked += 1
+                if found_title is not None and _tags_look_mismatched(row["artist"], row["title"], found_artist, found_title):
+                    mismatches.append({
+                        "id": row["id"], "score": score,
+                        "current_artist": row["artist"], "current_title": row["title"],
+                        "found_artist": found_artist, "found_title": found_title,
+                    })
+            except Exception:
+                errors += 1
+        progress_cb(i + 1, total)
+        time.sleep(0.35)  # AcoustID asks for at most ~3 requests/second per API key
+    _verify_audio_state["result"] = {"checked": checked, "errors": errors, "mismatches": mismatches}
 
 
 @app.route("/api/verify-audio", methods=["POST"])
@@ -1207,12 +1182,8 @@ def verify_audio_route():
     everything, accepting that cost."""
     data = request.get_json(force=True, silent=True) or {}
     track_ids = data.get("track_ids") or None
-    with _library_lock, _verify_audio_lock:
-        if _verify_audio_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _verify_audio_state.update(running=True, done=0, total=0, result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_verify_audio_bg, args=(track_ids,), daemon=True).start()
+    if not _verify_audio_job.start(_run_verify_audio_bg, track_ids, guard=_library_lock, prepare=lambda: close_db(None)):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True})
 
 
@@ -1461,60 +1432,62 @@ def _read_raw_tag_presence(fpath):
     return True, True, True
 
 
-_deep_scan_state = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
-_deep_scan_lock = threading.Lock()
+_deep_scan_job = jobs.Job("deep_scan", "Deep tag scan")
+_deep_scan_state = _deep_scan_job.state
 _DEEP_SCAN_WORKERS = 8  # I/O-bound (opening+reading file headers), not CPU-bound -- threads are fine
 
 
 def _run_deep_scan_bg(rows):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
+        total = len(rows)
+        checked = 0
+
+        def _check_one(row):
+            fpath = os.path.join(MUSIC_DIR, row["path"])
+            presence = (
+                _read_raw_tag_presence(fpath) if os.path.isfile(fpath) else (True, True, True)
+            )
+            return row["id"], presence
+
+        # Reading each file (open + parse tag header) is the slow part
+        # and fully independent per file -- farming it out across a
+        # small thread pool overlaps that I/O instead of doing it one
+        # file at a time, while the actual sqlite writes stay on this
+        # one thread/connection either way (sqlite doesn't want
+        # concurrent writers, and they're cheap compared to the reads).
+        pool = ThreadPoolExecutor(max_workers=_DEEP_SCAN_WORKERS)
         try:
-            total = len(rows)
-            checked = 0
-
-            def _check_one(row):
-                fpath = os.path.join(MUSIC_DIR, row["path"])
-                presence = (
-                    _read_raw_tag_presence(fpath) if os.path.isfile(fpath) else (True, True, True)
+            for track_id, (has_artist, has_title, has_art) in pool.map(_check_one, rows):
+                conn.execute(
+                    "UPDATE tracks SET has_artist_tag=?, has_title_tag=?, has_art=? WHERE id=?",
+                    (int(has_artist), int(has_title), int(has_art), track_id),
                 )
-                return row["id"], presence
-
-            # Reading each file (open + parse tag header) is the slow part
-            # and fully independent per file -- farming it out across a
-            # small thread pool overlaps that I/O instead of doing it one
-            # file at a time, while the actual sqlite writes stay on this
-            # one thread/connection either way (sqlite doesn't want
-            # concurrent writers, and they're cheap compared to the reads).
-            with ThreadPoolExecutor(max_workers=_DEEP_SCAN_WORKERS) as pool:
-                for track_id, (has_artist, has_title, has_art) in pool.map(_check_one, rows):
-                    conn.execute(
-                        "UPDATE tracks SET has_artist_tag=?, has_title_tag=?, has_art=? WHERE id=?",
-                        (int(has_artist), int(has_title), int(has_art), track_id),
-                    )
-                    checked += 1
-                    _deep_scan_state["done"] = checked
-                    _deep_scan_state["total"] = total
-                    if checked % 500 == 0:
-                        conn.commit()
+                checked += 1
+                _deep_scan_job.progress(checked, total)
+                if checked % 500 == 0:
+                    conn.commit()
+        except BaseException:
+            # Cancelled or failed: don't make `with`-style shutdown sit
+            # through every still-queued file read first.
+            pool.shutdown(wait=False, cancel_futures=True)
             conn.commit()
+            raise
+        pool.shutdown()
+        conn.commit()
 
-            result = {"checked": checked}
-            for key, col in (("artist", "has_artist_tag"), ("title", "has_title_tag"), ("art", "has_art")):
-                found = conn.execute(
-                    f"SELECT id, artist, title, album, year, primary_genre as genre FROM tracks "
-                    f"WHERE {col} = 0 ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE"
-                ).fetchall()
-                tracks = [dict(r) for r in found]
-                result[key] = {"count": len(tracks), "tracks": tracks}
-            _deep_scan_state["result"] = result
-        finally:
-            conn.close()
-    except Exception as e:
-        _deep_scan_state["error"] = str(e)
+        result = {"checked": checked}
+        for key, col in (("artist", "has_artist_tag"), ("title", "has_title_tag"), ("art", "has_art")):
+            found = conn.execute(
+                f"SELECT id, artist, title, album, year, primary_genre as genre FROM tracks "
+                f"WHERE {col} = 0 ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE"
+            ).fetchall()
+            tracks = [dict(r) for r in found]
+            result[key] = {"count": len(tracks), "tracks": tracks}
+        _deep_scan_state["result"] = result
     finally:
-        _deep_scan_state["running"] = False
+        conn.close()
 
 
 @app.route("/api/tags/deep-scan", methods=["POST"])
@@ -1529,12 +1502,8 @@ def tags_deep_scan():
     db = get_db()
     rows = [dict(r) for r in db.execute("SELECT id, path FROM tracks").fetchall()]
 
-    with _library_lock, _deep_scan_lock:
-        if _deep_scan_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _deep_scan_state.update(running=True, done=0, total=len(rows), result=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_deep_scan_bg, args=(rows,), daemon=True).start()
+    if not _deep_scan_job.start(_run_deep_scan_bg, rows, guard=_library_lock, prepare=lambda: close_db(None), total=len(rows)):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True, "total": len(rows)})
 
 
@@ -1967,8 +1936,8 @@ def convert_track(track_id):
     return jsonify(result)
 
 
-_convert_state = {"running": False, "done": 0, "total": 0, "results": None, "error": None}
-_convert_lock = threading.Lock()
+_convert_job = jobs.Job("convert", "Converting audio", results=None)
+_convert_state = _convert_job.state
 _CONVERT_WORKERS = 4  # each is a real ffmpeg transcode -- CPU/disk heavy, unlike the tag-scan's light file reads
 
 
@@ -1986,80 +1955,80 @@ def _convert_one_file(track_id, fpath, artist, title, fmt, output_root):
 
 
 def _run_convert_bg(track_ids, fmt):
+    import importlib
+    import convert_audio
+    importlib.reload(convert_audio)
+    output_root = _convert_output_dir()
+
+    # All the sqlite reads happen here, up front, on this one thread --
+    # the thread pool below only ever calls _convert_one_file, which
+    # touches files and ffmpeg, never the database.
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        import importlib
-        import convert_audio
-        importlib.reload(convert_audio)
-        output_root = _convert_output_dir()
-
-        # All the sqlite reads happen here, up front, on this one thread --
-        # the thread pool below only ever calls _convert_one_file, which
-        # touches files and ffmpeg, never the database.
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        try:
-            placeholders = ",".join("?" * len(track_ids))
-            rows_by_id = {
-                r["id"]: r for r in conn.execute(
-                    f"SELECT id, path, artist, title, ext FROM tracks WHERE id IN ({placeholders})",
-                    track_ids,
-                ).fetchall()
-            }
-        finally:
-            conn.close()
-
-        total = len(track_ids)
-        done = 0
-        results = [None] * total
-        to_submit = {}  # future -> index, only for tracks that actually need converting
-        for i, track_id in enumerate(track_ids):
-            row = rows_by_id.get(track_id)
-            if not row:
-                results[i] = {"track_id": track_id, "ok": False, "error": "track not found"}
-                continue
-            src_ext = row["ext"].lstrip(".").lower()
-            src_fmt = {"flac": "flac", "m4a": "alac", "mp3": "mp3320"}.get(src_ext)
-            if src_fmt == fmt:
-                results[i] = {
-                    "track_id": track_id, "ok": False,
-                    "error": f"already {convert_audio.FORMATS[fmt]['label']}",
-                }
-                continue
-            fpath = os.path.join(MUSIC_DIR, row["path"])
-            to_submit[i] = (track_id, fpath, row["artist"], row["title"])
-
-        done = total - len(to_submit)
-        _convert_state["done"] = done
-        _convert_state["total"] = total
-
-        with ThreadPoolExecutor(max_workers=_CONVERT_WORKERS) as pool:
-            futures = {
-                pool.submit(_convert_one_file, track_id, fpath, artist, title, fmt, output_root): i
-                for i, (track_id, fpath, artist, title) in to_submit.items()
-            }
-            for future in as_completed(futures):
-                results[futures[future]] = future.result()
-                done += 1
-                _convert_state["done"] = done
-
-        ok = sum(1 for r in results if r["ok"])
-        _convert_state["results"] = {
-            "total": total, "converted": ok, "failed": total - ok, "results": results,
+        placeholders = ",".join("?" * len(track_ids))
+        rows_by_id = {
+            r["id"]: r for r in conn.execute(
+                f"SELECT id, path, artist, title, ext FROM tracks WHERE id IN ({placeholders})",
+                track_ids,
+            ).fetchall()
         }
-    except Exception as e:
-        _convert_state["error"] = str(e)
     finally:
-        _convert_state["running"] = False
+        conn.close()
+
+    total = len(track_ids)
+    done = 0
+    results = [None] * total
+    to_submit = {}  # future -> index, only for tracks that actually need converting
+    for i, track_id in enumerate(track_ids):
+        row = rows_by_id.get(track_id)
+        if not row:
+            results[i] = {"track_id": track_id, "ok": False, "error": "track not found"}
+            continue
+        src_ext = row["ext"].lstrip(".").lower()
+        src_fmt = {"flac": "flac", "m4a": "alac", "mp3": "mp3320"}.get(src_ext)
+        if src_fmt == fmt:
+            results[i] = {
+                "track_id": track_id, "ok": False,
+                "error": f"already {convert_audio.FORMATS[fmt]['label']}",
+            }
+            continue
+        fpath = os.path.join(MUSIC_DIR, row["path"])
+        to_submit[i] = (track_id, fpath, row["artist"], row["title"])
+
+    done = total - len(to_submit)
+    _convert_job.progress(done, total)
+
+    pool = ThreadPoolExecutor(max_workers=_CONVERT_WORKERS)
+    try:
+        futures = {
+            pool.submit(_convert_one_file, track_id, fpath, artist, title, fmt, output_root): i
+            for i, (track_id, fpath, artist, title) in to_submit.items()
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+            done += 1
+            _convert_job.progress(done, total)
+    except BaseException:
+        # Cancelled: queued conversions never start; any ffmpeg already
+        # running finishes its own file (killing it mid-write would
+        # leave a truncated output behind).
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown()
+
+    ok = sum(1 for r in results if r["ok"])
+    _convert_state["results"] = {
+        "total": total, "converted": ok, "failed": total - ok, "results": results,
+    }
 
 
 def _start_convert(track_ids, fmt):
-    with _library_lock, _convert_lock:
-        if _convert_state["running"]:
-            return None
-        _convert_state.update(running=True, done=0, total=len(track_ids), results=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_convert_bg, args=(track_ids, fmt), daemon=True).start()
-    return len(track_ids)
+    started = _convert_job.start(
+        _run_convert_bg, track_ids, fmt, guard=_library_lock,
+        prepare=lambda: close_db(None), total=len(track_ids),
+    )
+    return len(track_ids) if started else None
 
 
 @app.route("/api/convert-tracks", methods=["POST"])
@@ -2443,14 +2412,12 @@ def _invalidate_dup_plan_cache():
         _dup_plan_cache["result"] = None
 
 
-_dup_clean_state = {"running": False, "done": 0, "total": 0, "deleted": 0, "errors": None, "error": None}
-_dup_clean_lock = threading.Lock()
+_dup_clean_job = jobs.Job("dup_clean", "Removing duplicates", deleted=0, errors=None)
+_dup_clean_state = _dup_clean_job.state
 
 
 def _run_dup_clean_bg(rows):
-    def progress_cb(done, total):
-        _dup_clean_state["done"] = done
-        _dup_clean_state["total"] = total
+    progress_cb = _dup_clean_job.progress
 
     try:
         # A fresh connection, not get_db()'s Flask-request-scoped one --
@@ -2463,10 +2430,7 @@ def _run_dup_clean_bg(rows):
             _dup_clean_state["errors"] = errors
         finally:
             conn.close()
-    except Exception as e:
-        _dup_clean_state["error"] = str(e)
     finally:
-        _dup_clean_state["running"] = False
         _invalidate_dup_plan_cache()
 
 
@@ -2501,12 +2465,8 @@ def duplicates_auto_clean():
             "skipped_groups": skipped_groups,
         })
 
-    with _library_lock, _dup_clean_lock:
-        if _dup_clean_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _dup_clean_state.update(running=True, done=0, total=len(to_delete), deleted=0, errors=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_dup_clean_bg, args=(to_delete,), daemon=True).start()
+    if not _dup_clean_job.start(_run_dup_clean_bg, to_delete, guard=_library_lock, prepare=lambda: close_db(None), total=len(to_delete)):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True, "total": len(to_delete)})
 
 
@@ -3031,6 +2991,16 @@ def _delete_track_rows(db, rows, progress_cb=None):
     deleted = 0
     errors = []
     total = len(rows)
+    try:
+        return _delete_track_rows_loop(db, rows, total, progress_cb, deleted, errors)
+    finally:
+        # Reached on a cancel (jobs.JobCancelled out of progress_cb) or any
+        # failure partway: the rows for files already moved to trash must
+        # still be committed, or the files and the library would disagree.
+        db.commit()
+
+
+def _delete_track_rows_loop(db, rows, total, progress_cb, deleted, errors):
     for i, row in enumerate(rows):
         fpath = os.path.join(MUSIC_DIR, row["path"])
         trash_name = f"{row['id']}_{os.path.basename(row['path'])}"
@@ -3093,14 +3063,12 @@ def delete_rated():
     return jsonify({"ok": True, "deleted": deleted, "errors": errors})
 
 
-_delete_tracks_state = {"running": False, "done": 0, "total": 0, "deleted": 0, "errors": None, "error": None}
-_delete_tracks_lock = threading.Lock()
+_delete_tracks_job = jobs.Job("delete_tracks", "Moving tracks to Trash", deleted=0, errors=None)
+_delete_tracks_state = _delete_tracks_job.state
 
 
 def _run_delete_tracks_bg(rows):
-    def progress_cb(done, total):
-        _delete_tracks_state["done"] = done
-        _delete_tracks_state["total"] = total
+    progress_cb = _delete_tracks_job.progress
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -3111,11 +3079,8 @@ def _run_delete_tracks_bg(rows):
             _delete_tracks_state["errors"] = errors
         finally:
             conn.close()
-    except Exception as e:
-        _delete_tracks_state["error"] = str(e)
     finally:
         _invalidate_dup_plan_cache()
-        _delete_tracks_state["running"] = False
 
 
 @app.route("/api/delete-tracks", methods=["POST"])
@@ -3139,12 +3104,8 @@ def delete_tracks_route():
     rows = [dict(r) for r in db.execute(
         f"SELECT id, path, artist, title, album FROM tracks WHERE id IN ({placeholders})", track_ids
     ).fetchall()]
-    with _library_lock, _delete_tracks_lock:
-        if _delete_tracks_state["running"]:
-            return jsonify({"started": False, "error": "Already running"})
-        _delete_tracks_state.update(running=True, done=0, total=len(rows), deleted=0, errors=None, error=None)
-        close_db(None)
-        threading.Thread(target=_run_delete_tracks_bg, args=(rows,), daemon=True).start()
+    if not _delete_tracks_job.start(_run_delete_tracks_bg, rows, guard=_library_lock, prepare=lambda: close_db(None), total=len(rows)):
+        return jsonify({"started": False, "error": "Already running"})
     return jsonify({"started": True, "total": len(rows)})
 
 

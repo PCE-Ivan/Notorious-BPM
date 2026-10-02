@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -219,6 +220,8 @@ def scan(progress_cb=None, force_prune=False):
     done = 0
     t0 = time.time()
 
+    stop = threading.Event()
+
     def _extract(candidate):
         """Runs in a worker thread: opens and parses one file's tags, pure
         function with no database access -- every actual sqlite write
@@ -226,6 +229,8 @@ def scan(progress_cb=None, force_prune=False):
         before. Returns None for a file that couldn't be read (logged
         here since that's the same for every caller), or a dict of the
         fields the caller writes to the tracks table."""
+        if stop.is_set():
+            return None
         fpath, rel, root, fname = candidate
         ext = os.path.splitext(fname)[1].lower()
         try:
@@ -270,42 +275,58 @@ def scan(progress_cb=None, force_prune=False):
     # instead of doing it strictly one file at a time. Every sqlite write
     # stays serialized on this one connection/thread either way, same as
     # before.
-    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
-        futures = {pool.submit(_extract, c): c for c in candidates}
-        for future in as_completed(futures):
-            fpath, rel, root, fname = futures[future]
-            seen_paths.add(rel)
-            done += 1
-            if progress_cb and done % 10 == 0:
-                progress_cb(done, total)
+    try:
+        with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+            futures = {pool.submit(_extract, c): c for c in candidates}
+            for future in as_completed(futures):
+                fpath, rel, root, fname = futures[future]
+                seen_paths.add(rel)
+                done += 1
+                if progress_cb and done % 10 == 0:
+                    try:
+                        progress_cb(done, total)
+                    except BaseException:
+                        stop.set()
+                        raise
 
-            fields = future.result()
-            if fields is None:
-                skipped += 1
-                continue
+                fields = future.result()
+                if fields is None:
+                    skipped += 1
+                    continue
 
-            if rel in existing_paths:
-                cur.execute(
-                    """UPDATE tracks SET artist=?, album=?, title=?, genre=?, primary_genre=?,
-                       year=?, decade=?, bpm=?, duration=?, ext=?, language=? WHERE path=?""",
-                    (fields["artist"], fields["album"], fields["title"], fields["genre"],
-                     fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
-                     fields["duration"], fields["ext"], fields["language"], fields["rel"]),
-                )
-                updated += 1
-            else:
-                cur.execute(
-                    """INSERT INTO tracks (path, artist, album, title, genre, primary_genre,
-                       year, decade, bpm, duration, ext, language) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (fields["rel"], fields["artist"], fields["album"], fields["title"], fields["genre"],
-                     fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
-                     fields["duration"], fields["ext"], fields["language"]),
-                )
-                inserted += 1
+                if rel in existing_paths:
+                    cur.execute(
+                        """UPDATE tracks SET artist=?, album=?, title=?, genre=?, primary_genre=?,
+                           year=?, decade=?, bpm=?, duration=?, ext=?, language=? WHERE path=?""",
+                        (fields["artist"], fields["album"], fields["title"], fields["genre"],
+                         fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
+                         fields["duration"], fields["ext"], fields["language"], fields["rel"]),
+                    )
+                    updated += 1
+                else:
+                    cur.execute(
+                        """INSERT INTO tracks (path, artist, album, title, genre, primary_genre,
+                           year, decade, bpm, duration, ext, language) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (fields["rel"], fields["artist"], fields["album"], fields["title"], fields["genre"],
+                         fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
+                         fields["duration"], fields["ext"], fields["language"]),
+                    )
+                    inserted += 1
 
-            if (inserted + updated) % 500 == 0:
-                conn.commit()
-                print(f"  ... {inserted + updated} processed ({time.time()-t0:.0f}s)")
+                if (inserted + updated) % 500 == 0:
+                    conn.commit()
+                    print(f"  ... {inserted + updated} processed ({time.time()-t0:.0f}s)")
+
+    except BaseException:
+        # A cancel (jobs.JobCancelled) or a failure mid-pass: keep every
+        # row already written instead of dropping the whole transaction
+        # with the connection, and don't leave the pool grinding through
+        # the remaining queued files first (stop makes each one return
+        # instantly).
+        stop.set()
+        conn.commit()
+        conn.close()
+        raise
 
     if progress_cb:
         progress_cb(done, total)

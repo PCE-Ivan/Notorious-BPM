@@ -40,6 +40,11 @@
 </div>
 
 <div class="app" id="app-root">
+  <div id="system-banner" class="system-banner hidden" role="alert">
+    <span id="system-banner-text"></span>
+    <button id="system-banner-fix" class="btn-small hidden">Open Privacy Settings</button>
+    <button id="system-banner-retry" class="btn-small">Retry</button>
+  </div>
   <header class="topbar">
     <div class="topbar-row1">
       <div class="topbar-group topbar-identity">
@@ -86,6 +91,17 @@
           </div>
           <div class="topbar-divider"></div>
           <button id="convert-menu" class="btn-secondary topbar-action-btn tile-risky" title="Convert selected tracks or a whole playlist to another format — writes new files">⇄ Convert</button>
+        </div>
+      </div>
+
+      <div class="topbar-divider"></div>
+
+      <div class="topbar-group activity-group">
+        <button id="activity-btn" class="btn-secondary topbar-action-btn" title="Running and recent background tasks, with Cancel">
+          ⚙ Activity <span id="activity-badge" class="activity-badge hidden">0</span>
+        </button>
+        <div id="activity-panel" class="activity-panel hidden">
+          <div id="activity-list" class="activity-list"></div>
         </div>
       </div>
 
@@ -1064,6 +1080,14 @@
          href="https://paypal.me/IPecek" rel="noopener noreferrer">
         💛 Support via PayPal
       </a>
+      <div class="about-diagnostics">
+        <p class="about-diagnostics-note">Something not working? These help pin it down.</p>
+        <div class="about-diagnostics-btns">
+          <button id="about-copy-diagnostics" class="btn-secondary">Copy diagnostics</button>
+          <button id="about-show-log" class="btn-secondary">Show log in Finder</button>
+        </div>
+        <textarea id="about-diagnostics-text" class="about-diagnostics-text hidden" readonly rows="8"></textarea>
+      </div>
     </div>
   </div>
 </div>
@@ -1159,5 +1183,6 @@
 </div>
 
 <script src="app.js"></script>
+<script src="activity.js"></script>
 </body>
 </html>
