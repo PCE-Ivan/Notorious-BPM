@@ -77,7 +77,7 @@ def build(ids):
         '<div class=center><img src="file://%s/icon.png" style="width:150px;height:150px;border-radius:34px;box-shadow:0 16px 50px rgba(0,0,0,.6);margin-bottom:26px">'
         '<h1 style="font-size:104px">GET IT FREE ON GITHUB</h1>'
         '<div style="margin-top:22px;font:600 54px ui-monospace,Menlo,monospace;color:#2D89EF;letter-spacing:-.01em">github.com/PCE-Ivan/Notorious-BPM</div>'
-        '<div style="margin-top:34px;font:500 28px -apple-system,sans-serif;color:#cfd3d9">Notorious B.P.M. · macOS · Windows · Linux &nbsp;·&nbsp; donations welcome, never required</div></div>' % HERE,
+        '<div style="margin-top:34px;font:500 28px -apple-system,sans-serif;color:#cfd3d9">Notorious B.P.M. · macOS · Apple Silicon &nbsp;·&nbsp; donations welcome, never required</div></div>' % HERE,
         ids=ids, collage_opacity=.42, shade="radial-gradient(ellipse at center, rgba(12,13,15,.4), rgba(12,13,15,.88))")
     return cards
 
