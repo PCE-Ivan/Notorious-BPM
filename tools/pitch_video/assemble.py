@@ -169,10 +169,10 @@ def main():
         out = f"[v{i}]"
         graph.append(f"{label}[{i}:v]xfade=transition=fade:duration={fades[i - 1]}:offset={offset:.3f}{out}")
         label = out
-    graph.append(f"{label}fade=t=in:st=0:d=0.4,fade=t=out:st={duration - 0.8:.3f}:d=0.8,format=yuv420p[vout]")
+    graph.append(f"{label}fade=t=in:st=0:d=0.4,fade=t=out:st={duration - 0.8:.3f}:d=0.8,scale=in_range=pc:in_color_matrix=bt601:out_range=tv:out_color_matrix=bt709:flags=lanczos+accurate_rnd,format=yuv420p[vout]")
     silent = os.path.join(OUT, "pitch_silent.mp4")
     cmd += ["-filter_complex", ";".join(graph), "-map", "[vout]", "-r", str(FPS), "-c:v", "libx264", "-crf", CRF, "-preset", PRESET,
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", silent]
+            "-pix_fmt", "yuv420p", "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-movflags", "+faststart", silent]
     run(cmd)
 
     # audio: narration at exact offsets
