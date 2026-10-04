@@ -702,7 +702,8 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
 .dup-summary-text { margin: 0 0 16px; font-size: 13px; line-height: 1.6; }
 .dup-summary-note { color: var(--text-dim); font-size: 12px; }
 .dup-clean-btn { width: 100%; padding: 10px; font-size: 13px; }
-.dup-toggle-details { margin-top: 10px; }
+.dup-toggle-details { margin-top: 12px; margin-bottom: 12px; }
+#dup-review-open { margin-top: 12px; }
 .dup-progress {
   margin-top: 10px;
   height: 6px;
