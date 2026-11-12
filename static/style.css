@@ -567,7 +567,11 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
 .autoplay-toggle { font-size: 11px; color: var(--text-dim); white-space: nowrap; display: flex; align-items: center; gap: 4px; }
 .volume-control { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .volume-control #volume-slider { width: 70px; }
-#shuffle-toggle.active { filter: brightness(1.4); box-shadow: 0 0 0 2px var(--accent) inset; }
+#shuffle-toggle.active, #repeat-toggle.active, #sleep-btn.active { filter: brightness(1.4); box-shadow: 0 0 0 2px var(--accent) inset; }
+#sleep-btn.active { width: auto; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+#sleep-menu { z-index: 210; min-width: 170px; }
+.queue-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.queue-actions .btn-small:disabled { opacity: .35; cursor: default; }
 
 .rating-controls { display: flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 0; flex-wrap: wrap; }
 .rating-controls .btn-small {
@@ -2363,7 +2367,16 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; text-align: cen
 .skeleton-row { height: 44px; margin: 0 0 1px; opacity: .6; }
 .skeleton-card { aspect-ratio: 1 / 1.35; border: 1px solid var(--border); opacity: .6; }
 @keyframes skeleton-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+/* Reduced motion: the decorative loops stop (shimmer, scrolling titles, spinners,
+   sliding progress bars). The themed decks' needles and reels keep moving
+   because the music does. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton, .activity-bar-fill.indeterminate, .dup-progress-fill.indeterminate,
+  .ipod-step.active .ipod-step-icon,
+  #stage-hifi .vfd-line.scrolling .vfd-line-inner,
+  #stage-cassette .cassette-handwriting.scrolling .scroll-line-inner,
+  #stage-vinyl .vinyl-nameplate-line.scrolling .scroll-line-inner { animation: none; }
+}
 
 /* cover-colour wash on the player bar (see setArtTint in app.js) */
 body[data-theme="default"] .player-bar,

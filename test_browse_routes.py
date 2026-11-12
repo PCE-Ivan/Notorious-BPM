@@ -109,6 +109,20 @@ class BrowseRoutesTest(unittest.TestCase):
         data = self.get("/api/tracks?album=Greatest%20Hits&artist=Other")
         self.assertEqual([t["title"] for t in data["tracks"]], ["Track B"])
 
+    def test_tracks_by_ids_keeps_order_and_drops_missing(self):
+        ids = [t["id"] for t in self.get("/api/tracks?limit=50")["tracks"]]
+        want = [ids[3], 987654, ids[0], ids[3], "x"]
+        data = self.get("/api/tracks/by-ids?ids=" + ",".join(map(str, want)))
+        self.assertEqual([t["id"] for t in data["tracks"]], [ids[3], ids[0]])  # order kept, unknown + duplicate dropped
+        self.assertIn("title", data["tracks"][0])
+        self.assertEqual(self.get("/api/tracks/by-ids?ids=")["tracks"], [])
+
+    def test_album_has_an_index(self):
+        conn = sqlite3.connect(m.DB_PATH)
+        names = {r[1] for r in conn.execute("PRAGMA index_list(tracks)")}
+        conn.close()
+        self.assertIn("idx_tracks_album", names)
+
     def test_bad_paging_is_a_400(self):
         self.assertEqual(self.client.get("/api/albums?limit=lots").status_code, 400)
 

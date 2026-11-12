@@ -61,6 +61,11 @@ Needs a Mac with **Apple Silicon** (M1 or later) running **macOS 14 or newer**.
 - Player themes: **Default** / **Graphite** (or *Match system* light/dark),
   **Hi-Fi** (audio-reactive VU meters), **Cassette** (spinning tape, spectrum
   bars), **Vinyl** (turntable with a moving tonearm, several wood finishes)
+- Shuffle, repeat (off / all / one), an Up-next queue you can reorder, and a
+  **sleep timer** (15 min – 1 hour, or end of the track) that fades out
+- Picks up where you left off: the playing track, its position, the queue and
+  your shuffle/repeat settings come back on the next launch (paused, never
+  blaring)
 - AirPlay output; "level volume across tracks" (ReplayGain-style, opt-in)
 - **Live Radio**: public internet stations (via the free
   [Radio Browser](https://www.radio-browser.info/) directory), **Match My
@@ -71,6 +76,8 @@ Needs a Mac with **Apple Silicon** (M1 or later) running **macOS 14 or newer**.
 - Every long task is a cancellable background job (Activity tray)
 - Readable errors, rotating logs, a "Copy diagnostics" button in About
 - Notices an unplugged drive or a macOS folder-permission block and says so
+- Private by construction: the app's local server answers only the app itself,
+  so a web page open in your browser can't reach your library
 - Automatic rating/playlist backup on every quit
 
 ### Optional extras
@@ -106,7 +113,7 @@ scratch libraries.
 `static/` is plain HTML/CSS/JS served by the Flask backend in `app.py`, split
 by feature (`app.js` core + player, `ipod.js`, `tagcheck.js`, `duplicates.js`,
 `radio.js`, `browse.js`, `keys.js`, `activity.js`, `import.js`, `health.js`,
-`history.js`) — classic scripts sharing one global scope, loaded in the order
+`history.js`, `session.js`) — classic scripts sharing one global scope, loaded in the order
 `index.html` lists them. `test_frontend_syntax.py` and `test_frontend_ids.py`
 catch a script that doesn't parse or an `el("id")` with no matching element.
 

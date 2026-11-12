@@ -136,6 +136,7 @@ def build_schema(conn):
         CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
         CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(primary_genre);
         CREATE INDEX IF NOT EXISTS idx_tracks_decade ON tracks(decade);
+        CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 
         CREATE TABLE IF NOT EXISTS ratings (
             track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,

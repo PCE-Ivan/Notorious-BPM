@@ -19,6 +19,7 @@ const state = {
   radioQueue: null, // {tracks:[...], name}
   selected: new Set(), // selected track ids, for multi-select actions
   shuffle: false,
+  repeat: "off", // "off" | "all" | "one" -- see session.js
   queue: [], // user-queued track objects, consumed before autoplay/similar
 };
 
@@ -879,7 +880,18 @@ function playTrack(track, contextList, opts) {
   }
 
   audio.src = `${API}/stream/${track.id}`;
-  audio.play();
+  state.cueing = !!(opts && opts.paused);
+  if (state.cueing) {
+    // Picking up where the last session left off: loaded and cued, not playing.
+    audio.addEventListener("loadedmetadata", () => {
+      state.cueing = false;
+      if (opts.startAt > 0) audio.currentTime = opts.startAt;
+    }, { once: true });
+  } else {
+    // A fast skip interrupts the previous play() -- that rejection is expected, not an error.
+    const started = audio.play();
+    if (started && started.catch) started.catch(() => {});
+  }
   el("np-title").textContent = track.title || "Untitled";
   el("np-sub").textContent = [track.artist, track.primary_genre, track.year].filter(Boolean).join(" · ");
   const artEl = el("np-art");
@@ -895,7 +907,8 @@ function playTrack(track, contextList, opts) {
   applyTrackGain(track);
   themeOnTrackChange(track);
   updateMediaSession(track, artUrl(track.id));
-  api(`/plays/${track.id}`, { method: "POST" }).catch(() => {});
+  if (!opts || !opts.paused) api(`/plays/${track.id}`, { method: "POST" }).catch(() => {});  // cueing isn't playing
+  if (typeof saveSession === "function") saveSession();
 }
 
 function refreshPlayingHighlight() {
@@ -941,23 +954,40 @@ audio.addEventListener("error", () => {
     4: "the file couldn't be loaded -- check the music folder is connected and this app has permission to read it",
   };
   const reason = reasons[audio.error.code] || "an unknown error occurred";
+  if (state.cueing) {
+    // Only cueing the last session's track at startup -- nobody pressed play, so no
+    // "couldn't play" toast; the status check below still explains a missing drive.
+    state.cueing = false;
+    if (typeof checkSystemStatus === "function") checkSystemStatus();
+    return;
+  }
   showToast(`Couldn't play "${state.currentTrack.title || "this track"}" — ${reason}.`, { kind: "error" });
   // A file that won't load is very often a disconnected drive or a revoked
   // permission -- ask the server, which puts the real cause in the banner.
   if (typeof checkSystemStatus === "function") checkSystemStatus();
 });
 
+// Like every player: a few seconds in, "previous" restarts the track; only
+// near the start does it go back to the one before.
 function playPrevious() {
+  const live = state.currentTrack && state.currentTrack.isRadio;
+  if ((audio.currentTime > 3 || state.historyPos <= 0) && !live && state.currentTrack) {
+    audio.currentTime = 0;
+    return;
+  }
   if (state.historyPos <= 0) return;
   state.historyPos--;
   playTrack(state.playHistory[state.historyPos], null, { addHistory: false });
 }
+// The themed decks' Next used to ask the server for a "similar" track, ignoring
+// the queue, shuffle and list order that the plain player's Next honours.
+// playNext() does all of that and falls back to similar-track autoplay itself.
 el("hifi-prev").addEventListener("click", playPrevious);
-el("hifi-next").addEventListener("click", playNextSimilar);
+el("hifi-next").addEventListener("click", playNext);
 el("cassette-prev").addEventListener("click", playPrevious);
-el("cassette-next").addEventListener("click", playNextSimilar);
+el("cassette-next").addEventListener("click", playNext);
 el("vinyl-prev").addEventListener("click", playPrevious);
-el("vinyl-next").addEventListener("click", playNextSimilar);
+el("vinyl-next").addEventListener("click", playNext);
 
 audio.addEventListener("timeupdate", () => {
   if (!isFinite(audio.duration)) return;
@@ -1003,6 +1033,12 @@ function fmtTime(s) {
 // naturally should always hand off to it, the same as clicking Next
 // manually, not just when shuffle/queue/autoplay-similar happen to be on.
 audio.addEventListener("ended", () => {
+  if (typeof sleepShouldStop === "function" && sleepShouldStop()) return;  // sleep timer: "end of this track"
+  if (state.repeat === "one" && state.currentTrack && !state.currentTrack.isRadio) {
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+    return;
+  }
   playNext();
 });
 el("autoplay-similar").addEventListener("change", (e) => { state.autoplaySimilar = e.target.checked; });
@@ -2959,7 +2995,7 @@ el("organize-by-artist").addEventListener("click", async () => {
 // element volume can't amplify.
 function setOutputVolume() {
   const slider = Number(el("volume-slider").value) / 100;
-  audio.volume = Math.max(0, Math.min(1, slider * state.trackGain));
+  audio.volume = Math.max(0, Math.min(1, slider * state.trackGain * (state.fade == null ? 1 : state.fade)));
 }
 
 const trackGainCache = new Map();  // track id -> dB, only for measured tracks
@@ -3065,6 +3101,7 @@ el("shuffle-toggle").addEventListener("click", () => {
 // end, so queueing a handful of songs from a list keeps their order.
 function updateQueueBadge() {
   el("queue-btn").textContent = state.queue.length ? `Queue · ${state.queue.length}` : "Queue";
+  if (typeof saveSession === "function") saveSession();
 }
 
 function queueTrackNext(track, btn) {
@@ -3094,12 +3131,27 @@ function renderQueue() {
     row.className = "tag-issue-row";
     row.innerHTML = `
       <div class="tag-issue-info">${i + 1}. ${escapeHtml(t.artist || "")} — ${escapeHtml(t.title || "")}</div>
-      <button class="btn-small queue-remove">Remove</button>
+      <div class="queue-actions">
+        <button class="btn-small queue-play" title="Play this now">▶</button>
+        <button class="btn-small queue-up" title="Move up" aria-label="Move up"${i === 0 ? " disabled" : ""}>↑</button>
+        <button class="btn-small queue-down" title="Move down" aria-label="Move down"${i === state.queue.length - 1 ? " disabled" : ""}>↓</button>
+        <button class="btn-small queue-remove">Remove</button>
+      </div>
     `;
-    row.querySelector(".queue-remove").addEventListener("click", () => {
-      state.queue.splice(i, 1);
-      renderQueue();
-      updateQueueBadge();
+    const changed = () => { renderQueue(); updateQueueBadge(); };
+    row.querySelector(".queue-remove").addEventListener("click", () => { state.queue.splice(i, 1); changed(); });
+    row.querySelector(".queue-play").addEventListener("click", () => {
+      const [picked] = state.queue.splice(i, 1);
+      changed();
+      playTrack(picked);
+    });
+    row.querySelector(".queue-up").addEventListener("click", () => {
+      [state.queue[i - 1], state.queue[i]] = [state.queue[i], state.queue[i - 1]];
+      changed();
+    });
+    row.querySelector(".queue-down").addEventListener("click", () => {
+      [state.queue[i + 1], state.queue[i]] = [state.queue[i], state.queue[i + 1]];
+      changed();
     });
     list.appendChild(row);
   });
@@ -3152,6 +3204,12 @@ async function playNext() {
     }
   }
 
+  // Repeat-all: the end of the list wraps to its start.
+  if (state.repeat === "all" && idx >= 0 && state.currentList.length) {
+    playTrack(state.currentList[0], state.currentList);
+    return;
+  }
+
   if (el("autoplay-similar").checked) {
     await playNextSimilar();
   }
@@ -3200,6 +3258,9 @@ document.addEventListener("keydown", (e) => {
       break;
     case "s": case "S":
       el("shuffle-toggle").click();
+      break;
+    case "r": case "R":
+      el("repeat-toggle").click();
       break;
     case "q": case "Q":
       el("queue-btn").click();

@@ -28,6 +28,7 @@ import health
 import importer
 import jobs
 import journal
+import local_guard
 import loudness
 import logging
 import logging_setup
@@ -81,6 +82,22 @@ STATIC_DIR = os.environ.get(
 )
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="")
+
+
+@app.before_request
+def _local_requests_only():
+    """Other websites open in the user's browser can fire requests at this
+    server too -- see local_guard's docstring. Refused before any route runs."""
+    reason = local_guard.check_request(
+        request.method, request.host,
+        origin=request.headers.get("Origin"),
+        sec_fetch_site=request.headers.get("Sec-Fetch-Site"),
+        sec_fetch_mode=request.headers.get("Sec-Fetch-Mode"),
+    )
+    if reason:
+        log.warning("Refused %s %s: %s (Origin=%r, Host=%r)", request.method, request.path, reason,
+                    request.headers.get("Origin"), request.host)
+        return jsonify({"ok": False, "error": "This request didn't come from the app itself.", "kind": "forbidden"}), 403
 
 
 @app.after_request
@@ -391,6 +408,24 @@ def _handle_unexpected_error(e):
 
 
 _STARTED_AT = time.time()
+
+_client_log_budget = {"n": 0, "window": 0.0}
+
+
+@app.route("/api/client-log", methods=["POST"])
+def client_log():
+    """A script error in the page, so it lands in the same log "Copy
+    diagnostics" points at instead of vanishing into a web inspector nobody
+    has open. Capped (a runaway loop of errors must not fill the disk)."""
+    now = time.time()
+    if now - _client_log_budget["window"] > 60:
+        _client_log_budget.update(n=0, window=now)
+    _client_log_budget["n"] += 1
+    if _client_log_budget["n"] <= 20:
+        data = request.get_json(force=True, silent=True) or {}
+        log.error("Page error: %s | %s | %s", str(data.get("message", ""))[:500],
+                  str(data.get("where", ""))[:200], str(data.get("stack", ""))[:1500])
+    return jsonify({"ok": True})
 
 
 @app.route("/api/instance")
@@ -3348,6 +3383,26 @@ def artists_route():
     return jsonify({"items": [dict(r) for r in rows], "total": total})
 
 
+@app.route("/api/tracks/by-ids")
+def tracks_by_ids():
+    """The tracks for `?ids=1,2,3`, in that order, current data -- ids that no
+    longer exist (deleted, library switched) are simply left out. Lets the
+    player pick up where it left off after a restart without trusting a stale
+    copy of the tracks it saved."""
+    ids = []
+    for part in request.args.get("ids", "").split(","):
+        if part.strip().isdigit() and int(part) not in ids:
+            ids.append(int(part))
+    ids = ids[:500]
+    if not ids:
+        return jsonify({"tracks": []})
+    rows = get_db().execute(
+        f"SELECT {TRACK_FIELDS} FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id "
+        f"WHERE t.id IN ({','.join('?' * len(ids))})", ids).fetchall()
+    by_id = {r["id"]: track_to_dict(r) for r in rows}
+    return jsonify({"tracks": [by_id[i] for i in ids if i in by_id]})
+
+
 @app.route("/api/track-ids")
 def track_ids():
     db = get_db()
@@ -4749,6 +4804,8 @@ def radio_proxy():
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
         abort(400)
+    if local_guard.refuse_private_url(url):
+        abort(400)  # not a way to reach the router or other things on the local network
 
     req = urllib.request.Request(url, headers={"User-Agent": RADIO_UA, "Icy-MetaData": "1"})
     try:

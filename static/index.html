@@ -11,7 +11,7 @@
   <div class="dup-panel welcome-panel">
     <div class="dup-panel-header">
       <h3>Welcome to Notorious B.P.M.</h3>
-      <button id="welcome-close" class="btn-icon" title="Close">✕</button>
+      <button id="welcome-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <p class="dup-summary-text">
@@ -157,8 +157,8 @@
             <option value="green">Green</option>
           </select>
         </span>
-        <button id="focus-mode-btn" class="btn-icon stage-toolbtn hidden" title="Focus mode — hide everything but the player">⤢</button>
-        <button id="popout-btn" class="btn-icon stage-toolbtn hidden" title="Pop out as a floating player">⧉</button>
+        <button id="focus-mode-btn" class="btn-icon stage-toolbtn hidden" title="Focus mode — hide everything but the player" aria-label="Focus mode">⤢</button>
+        <button id="popout-btn" class="btn-icon stage-toolbtn hidden" title="Pop out as a floating player" aria-label="Pop out as a floating player">⧉</button>
       </div>
     </div>
     <div class="tile-bar">
@@ -311,7 +311,7 @@
     </main>
 
     <aside id="theme-stage" class="theme-stage hidden">
-    <button id="stage-exit-focus" class="stage-exit-btn hidden" title="Exit focus mode">✕</button>
+    <button id="stage-exit-focus" class="stage-exit-btn hidden" title="Exit focus mode" aria-label="Exit focus mode">✕</button>
     <div id="stage-hifi" class="stage-panel hidden">
       <div class="hifi-panel">
         <div class="hifi-art-frame">
@@ -416,9 +416,9 @@
         <input id="hifi-seek" type="range" min="0" max="100" value="0" class="hifi-progress">
 
         <div class="hifi-transport">
-          <button id="hifi-prev" class="hifi-btn" title="Previous track">⏮</button>
-          <button id="hifi-play-pause" class="hifi-btn hifi-btn-play" title="Play/Pause">▶</button>
-          <button id="hifi-next" class="hifi-btn" title="Next similar track">⏭</button>
+          <button id="hifi-prev" class="hifi-btn" title="Previous track" aria-label="Previous track">⏮</button>
+          <button id="hifi-play-pause" class="hifi-btn hifi-btn-play" title="Play/Pause" aria-label="Play/Pause">▶</button>
+          <button id="hifi-next" class="hifi-btn" title="Next (N)" aria-label="Next">⏭</button>
         </div>
       </div>
     </div>
@@ -546,9 +546,9 @@
         <input id="cassette-seek" type="range" min="0" max="100" value="0" class="cassette-progress">
 
         <div class="cassette-transport">
-          <button id="cassette-prev" class="cassette-switch" title="Previous track">⏮</button>
-          <button id="cassette-play-pause" class="cassette-switch cassette-switch-play" title="Play/Pause">▶</button>
-          <button id="cassette-next" class="cassette-switch" title="Next similar track">⏭</button>
+          <button id="cassette-prev" class="cassette-switch" title="Previous track" aria-label="Previous track">⏮</button>
+          <button id="cassette-play-pause" class="cassette-switch cassette-switch-play" title="Play/Pause" aria-label="Play/Pause">▶</button>
+          <button id="cassette-next" class="cassette-switch" title="Next (N)" aria-label="Next">⏭</button>
         </div>
       </div>
     </div>
@@ -591,9 +591,9 @@
           </div>
 
           <div class="vinyl-transport">
-            <button id="vinyl-prev" class="vinyl-btn" title="Previous track">⏮</button>
-            <button id="vinyl-play-pause" class="vinyl-btn vinyl-btn-play" title="Play/Pause">▶</button>
-            <button id="vinyl-next" class="vinyl-btn" title="Next similar track">⏭</button>
+            <button id="vinyl-prev" class="vinyl-btn" title="Previous track" aria-label="Previous track">⏮</button>
+            <button id="vinyl-play-pause" class="vinyl-btn vinyl-btn-play" title="Play/Pause" aria-label="Play/Pause">▶</button>
+            <button id="vinyl-next" class="vinyl-btn" title="Next (N)" aria-label="Next">⏭</button>
           </div>
         </div>
       </div>
@@ -608,15 +608,17 @@
         <div class="np-title" id="np-title">Nothing playing</div>
         <div class="np-sub" id="np-sub"></div>
       </div>
-      <button id="lyrics-btn" class="btn-icon" title="Lyrics (L)">📜</button>
-      <button id="art-fetch-btn" class="btn-icon hidden" title="Fetch cover art">🖼</button>
-      <button id="radio-identify-btn" class="btn-icon hidden" title="Identify this song (Shazam-style, via AcoustID)">🔍</button>
+      <button id="lyrics-btn" class="btn-icon" title="Lyrics (L)" aria-label="Lyrics">📜</button>
+      <button id="art-fetch-btn" class="btn-icon hidden" title="Fetch cover art" aria-label="Fetch cover art">🖼</button>
+      <button id="radio-identify-btn" class="btn-icon hidden" title="Identify this song (Shazam-style, via AcoustID)" aria-label="Identify this song">🔍</button>
     </div>
     <div class="player-controls">
-      <button id="prev-track" class="btn-icon" title="Previous (P)">⏮</button>
-      <button id="play-pause" class="btn-icon" title="Play/Pause (Space)">▶</button>
-      <button id="skip-next" class="btn-icon" title="Next (N)">⏭</button>
-      <button id="shuffle-toggle" class="btn-icon" title="Shuffle (S)">🔀</button>
+      <button id="prev-track" class="btn-icon" title="Previous (P)" aria-label="Previous">⏮</button>
+      <button id="play-pause" class="btn-icon" title="Play/Pause (Space)" aria-label="Play/Pause">▶</button>
+      <button id="skip-next" class="btn-icon" title="Next (N)" aria-label="Next">⏭</button>
+      <button id="shuffle-toggle" class="btn-icon" title="Shuffle (S)" aria-label="Shuffle">🔀</button>
+      <button id="repeat-toggle" class="btn-icon" title="Repeat: off (R)" aria-label="Repeat: off">🔁</button>
+      <button id="sleep-btn" class="btn-icon" title="Sleep timer" aria-label="Sleep timer">🌙</button>
       <label class="autoplay-toggle">
         <input type="checkbox" id="autoplay-similar">
         Auto-play similar next
@@ -701,7 +703,7 @@
   <div class="dup-panel">
     <div class="dup-panel-header">
       <h3>Remove duplicates</h3>
-      <button id="dup-close" class="btn-icon" title="Close">✕</button>
+      <button id="dup-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <p id="dup-summary" class="dup-summary-text">Scanning your library for duplicates…</p>
@@ -730,7 +732,7 @@
   <div class="dup-panel dup-review-panel">
     <div class="dup-panel-header">
       <h3 id="dup-review-title">Review remaining duplicates</h3>
-      <button id="dup-review-close" class="btn-icon" title="Close">✕</button>
+      <button id="dup-review-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div id="dup-review-bulk-bar" class="dup-review-bulk-bar hidden">
       <span id="dup-review-selected-count"></span>
@@ -757,7 +759,7 @@
   <div class="tags-panel">
     <div class="dup-panel-header">
       <h3>Tag checker</h3>
-      <button id="tags-close" class="btn-icon" title="Close">✕</button>
+      <button id="tags-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="tags-body">
       <div class="tags-checklist">
@@ -865,7 +867,7 @@
   <div class="dup-panel ipod-panel">
     <div class="dup-panel-header">
       <h3>Import from iPod</h3>
-      <button id="ipod-close" class="btn-icon" title="Close">✕</button>
+      <button id="ipod-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <!-- Shown first, before any detect/copy logic runs -- the iPod's own
@@ -977,12 +979,22 @@
   </div>
 </div>
 
+<div id="sleep-menu" class="context-menu hidden" role="menu" aria-label="Sleep timer">
+  <button class="context-menu-item" role="menuitem" data-minutes="15">15 minutes</button>
+  <button class="context-menu-item" role="menuitem" data-minutes="30">30 minutes</button>
+  <button class="context-menu-item" role="menuitem" data-minutes="45">45 minutes</button>
+  <button class="context-menu-item" role="menuitem" data-minutes="60">1 hour</button>
+  <button class="context-menu-item" role="menuitem" data-minutes="end">End of this track</button>
+  <div class="context-menu-divider"></div>
+  <button id="sleep-cancel" class="context-menu-item" role="menuitem">Turn timer off</button>
+</div>
+
 <div id="queue-backdrop" class="modal-backdrop hidden">
   <div class="dup-panel">
     <div class="dup-panel-header">
       <h3>Up next</h3>
       <button id="queue-clear-btn" class="btn-small">Clear</button>
-      <button id="queue-close" class="btn-icon" title="Close">✕</button>
+      <button id="queue-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <div id="queue-list" class="tags-results"></div>
@@ -995,7 +1007,7 @@
     <div class="dup-panel-header">
       <h3>Trash</h3>
       <button id="trash-empty-btn" class="btn-small danger-btn">Empty trash</button>
-      <button id="trash-close" class="btn-icon" title="Close">✕</button>
+      <button id="trash-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <p class="dup-summary-text">Deleted files land here instead of being erased outright — restore one, or empty the trash for good.</p>
@@ -1008,7 +1020,7 @@
   <div class="dup-panel">
     <div class="dup-panel-header">
       <h3>Listening stats</h3>
-      <button id="stats-close" class="btn-icon" title="Close">✕</button>
+      <button id="stats-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body" id="stats-body"></div>
   </div>
@@ -1018,7 +1030,7 @@
   <div class="dup-panel help-panel">
     <div class="dup-panel-header">
       <h3>Help</h3>
-      <button id="help-close" class="btn-icon" title="Close">✕</button>
+      <button id="help-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body help-body">
       <p class="help-intro">
@@ -1033,7 +1045,7 @@
         <span><kbd>←</kbd> <kbd>→</kbd></span><span>Seek 5 seconds</span>
         <span><kbd>↑</kbd> <kbd>↓</kbd></span><span>Volume</span>
         <span><kbd>1</kbd>–<kbd>5</kbd></span><span>Rate the playing track</span>
-        <span><kbd>S</kbd> <kbd>Q</kbd> <kbd>L</kbd> <kbd>M</kbd></span><span>Shuffle · queue · lyrics · mute</span>
+        <span><kbd>S</kbd> <kbd>R</kbd> <kbd>Q</kbd> <kbd>L</kbd> <kbd>M</kbd></span><span>Shuffle · repeat · queue · lyrics · mute</span>
         <span><kbd>J</kbd> <kbd>K</kbd></span><span>Move down / up the track list</span>
         <span><kbd>⇧</kbd>+<kbd>J</kbd> <kbd>K</kbd></span><span>…while selecting a range</span>
         <span><kbd>Enter</kbd></span><span>Play the highlighted track</span>
@@ -1121,7 +1133,7 @@
   <div class="dup-panel health-panel">
     <div class="dup-panel-header">
       <h3>Change history</h3>
-      <button id="history-close" class="btn-icon" title="Close">✕</button>
+      <button id="history-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <p class="dup-summary-text">Bulk tag edits and file moves, newest first. Undo puts the files and the library back as they were — a tag you've edited again since is left alone.</p>
@@ -1134,7 +1146,7 @@
   <div class="dup-panel health-panel">
     <div class="dup-panel-header">
       <h3>Library health</h3>
-      <button id="health-close" class="btn-icon" title="Close">✕</button>
+      <button id="health-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <p id="health-summary" class="dup-summary-text">Checks the library against the files on disk, the cover-art cache and the Trash.</p>
@@ -1152,7 +1164,7 @@
   <div class="dup-panel">
     <div class="dup-panel-header">
       <h3>About Notorious B.P.M.</h3>
-      <button id="about-close" class="btn-icon" title="Close">✕</button>
+      <button id="about-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body about-body">
       <p class="about-copyright">© 2026 Ivan Pecek. All rights reserved.</p>
@@ -1184,7 +1196,7 @@
   <div class="dup-panel">
     <div class="dup-panel-header">
       <h3 id="lyrics-title">Lyrics</h3>
-      <button id="lyrics-close" class="btn-icon" title="Close">✕</button>
+      <button id="lyrics-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body" id="lyrics-body"></div>
   </div>
@@ -1194,7 +1206,7 @@
   <div class="radio-panel">
     <div class="dup-panel-header">
       <h3>Live Radio</h3>
-      <button id="radio-close" class="btn-icon" title="Close">✕</button>
+      <button id="radio-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="radio-match-row">
       <button id="radio-match-btn" class="btn-secondary" title="Find live stations playing music similar to what's in your library">🎯 Match My Library</button>
@@ -1222,7 +1234,7 @@
   <div class="dup-panel">
     <div class="dup-panel-header">
       <h3>Backup your library data</h3>
-      <button id="export-close" class="btn-icon" title="Close">✕</button>
+      <button id="export-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <p class="dup-summary-text">Ratings and playlists live in the local index, not your files — export them so they survive a fresh install or a move to another machine.</p>
@@ -1239,7 +1251,7 @@
   <div class="dup-panel">
     <div class="dup-panel-header">
       <h3>New smart playlist</h3>
-      <button id="smart-playlist-close" class="btn-icon" title="Close">✕</button>
+      <button id="smart-playlist-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
       <div class="filter-group">
@@ -1288,5 +1300,6 @@
 <script src="import.js"></script>
 <script src="health.js"></script>
 <script src="history.js"></script>
+<script src="session.js"></script>
 </body>
 </html>

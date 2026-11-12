@@ -61,6 +61,17 @@ class FrontendIdsTest(unittest.TestCase):
         loaded = set(re.findall(r'<script src="([^"]+\.js)"', self.html))
         self.assertEqual(set(scripts()) - loaded, set(), "a script exists in static/ but index.html never loads it")
 
+    def test_icon_only_buttons_have_an_accessible_name(self):
+        # A button whose whole content is a glyph (✕ ⏮ 📜) is announced as that glyph; the
+        # tooltip isn't a reliable name. Needs an aria-label.
+        unlabeled = []
+        for m in re.finditer(r"<button\b([^>]*)>([^<]{1,4})</button>", self.html):
+            attrs = m.group(1)
+            if "aria-label" not in attrs and not re.search(r"[A-Za-z]{2}", m.group(2)):
+                ident = re.search(r'id="([^"]+)"', attrs)
+                unlabeled.append(ident.group(1) if ident else m.group(0)[:60])
+        self.assertEqual(unlabeled, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
