@@ -49,6 +49,9 @@ Needs a Mac with **Apple Silicon** (M1 or later) running **macOS 14 or newer**.
   network), so renamed or re-tagged copies are found too; marks the best copy
   and sends the rest to a Trash you can restore from. Cached, so only the
   first run is slow
+- **Tidy file names** — after a cleanup the kept copy may still be called
+  `Song (2).mp3`; this gives it its plain name back (previewed first, never
+  touches a number that belongs to the title, undoable)
 - Tag checker with one-click Deezer genre/year lookup; verify tags against the
   audio via AcoustID, for the whole library, resumable
 - Change history with one-click **Undo** for bulk tag edits and file moves;
@@ -113,7 +116,7 @@ scratch libraries.
 `static/` is plain HTML/CSS/JS served by the Flask backend in `app.py`, split
 by feature (`app.js` core + player, `ipod.js`, `tagcheck.js`, `duplicates.js`,
 `radio.js`, `browse.js`, `keys.js`, `activity.js`, `import.js`, `health.js`,
-`history.js`, `session.js`) — classic scripts sharing one global scope, loaded in the order
+`history.js`, `session.js`, `tidy.js`) — classic scripts sharing one global scope, loaded in the order
 `index.html` lists them. `test_frontend_syntax.py` and `test_frontend_ids.py`
 catch a script that doesn't parse or an `el("id")` with no matching element.
 

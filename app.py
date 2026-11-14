@@ -24,6 +24,7 @@ from flask import Flask, g, has_app_context, jsonify, request, send_file, abort,
 
 import audio_dupes
 import config as jukebox_config
+import filename_cleanup
 import health
 import importer
 import jobs
@@ -1220,6 +1221,50 @@ def organize_by_artist_route():
 @app.route("/api/organize-progress")
 def organize_progress():
     return jsonify(_organize_state)
+
+
+# ---------------------------------------------------------- tidy file names --
+
+def _tidy_names_rows(db):
+    return db.execute("SELECT id, path, title, artist, has_title_tag FROM tracks").fetchall()
+
+
+@app.route("/api/tidy-names/preview")
+def tidy_names_preview():
+    """Files whose name still carries a copy number ("Song (2).mp3") that can
+    go back to the plain name, and the ones that can't yet -- see
+    filename_cleanup. Looks only; renames nothing."""
+    result = filename_cleanup.plan(_tidy_names_rows(get_db()), MUSIC_DIR)
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/tidy-names", methods=["POST"])
+def tidy_names_apply():
+    blocked = _music_blocker_response()
+    if blocked:
+        return blocked
+    data = request.get_json(force=True, silent=True) or {}
+    ids = [i for i in (data.get("ids") or []) if isinstance(i, int)]
+    if not ids:
+        return jsonify({"ok": False, "error": "Nothing was selected."}), 400
+    if _any_background_job_running():
+        return jsonify({"ok": False, "error": "A background job is running — wait for it to finish, then try again."})
+    if not _library_lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "The library is busy — try again in a moment."})
+    try:
+        _snapshot_db()
+        close_db(None)  # this request's own connection must not hold the file while another one writes
+        result = filename_cleanup.apply(DB_PATH, MUSIC_DIR, ids)
+        path_moves = result.pop("path_moves")
+        if path_moves:
+            n = len(path_moves)
+            with journal.operation(DB_PATH, MUSIC_DIR, "tidy_names",
+                                   f"Tidied {n} file name{'' if n == 1 else 's'}"):
+                journal.record_moves(path_moves)
+            _invalidate_dup_plan_cache()
+    finally:
+        _library_lock.release()
+    return jsonify({"ok": True, **result})
 
 
 _fill_genres_job = jobs.Job("fill_genres", "Filling missing genres", progress_extra="found", found=0)
@@ -3882,12 +3927,14 @@ def log_play(track_id):
 @app.route("/api/stats")
 def listening_stats():
     db = get_db()
+    # play_count / last_played_at aren't in TRACK_FIELDS (no list needs them) --
+    # without them here the page showed "undefined×" for every count.
     top_tracks = db.execute(
-        f"SELECT {TRACK_FIELDS} FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id "
-        "WHERE t.play_count > 0 ORDER BY t.play_count DESC LIMIT 25"
+        f"SELECT {TRACK_FIELDS}, t.play_count, t.last_played_at FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id "
+        "WHERE t.play_count > 0 ORDER BY t.play_count DESC, t.last_played_at DESC LIMIT 25"
     ).fetchall()
     recently_played = db.execute(
-        f"SELECT {TRACK_FIELDS} FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id "
+        f"SELECT {TRACK_FIELDS}, t.play_count, t.last_played_at FROM tracks t LEFT JOIN ratings r ON r.track_id = t.id "
         "WHERE t.last_played_at IS NOT NULL ORDER BY t.last_played_at DESC LIMIT 25"
     ).fetchall()
     top_artists = db.execute(

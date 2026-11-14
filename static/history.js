@@ -1,7 +1,7 @@
 // Change history / undo (see journal.py). Loaded after app.js.
 
 const HISTORY_KIND_ICON = {
-  fill_genres: "🎼", fill_years: "📅", unify_genre: "🎚", fix_artist_title: "✏️", organize: "🗂", edit_tags: "🏷",
+  fill_genres: "🎼", fill_years: "📅", unify_genre: "🎚", fix_artist_title: "✏️", organize: "🗂", edit_tags: "🏷", tidy_names: "🧹",
 };
 
 function historyWhen(iso) {

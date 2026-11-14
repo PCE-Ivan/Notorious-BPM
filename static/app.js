@@ -676,6 +676,10 @@ function toggleSelection(trackId, row) {
     state.selected.add(trackId);
     row.classList.add("selected");
   }
+  // Cmd-click and right-click select without touching the checkbox itself --
+  // it has to be told, or a highlighted row sits there looking unticked.
+  const cb = row.querySelector(".col-check input");
+  if (cb) cb.checked = state.selected.has(trackId);
   updateSelectionToolbar();
 }
 
@@ -894,6 +898,8 @@ function playTrack(track, contextList, opts) {
   }
   el("np-title").textContent = track.title || "Untitled";
   el("np-sub").textContent = [track.artist, track.primary_genre, track.year].filter(Boolean).join(" · ");
+  el("np-title").title = el("np-title").textContent;  // the bar ellipsizes long titles
+  el("np-sub").title = el("np-sub").textContent;
   const artEl = el("np-art");
   artEl.classList.remove("hidden");
   artEl.onerror = () => { artEl.classList.add("hidden"); setArtTint(null); };
@@ -1087,6 +1093,7 @@ const SEARCH_COMMANDS = [
   { cmd: "tag", label: "Tag checker", btn: "open-tag-checker", group: "Library" },
   { cmd: "folder", label: "Choose folder", btn: "choose-folder", group: "Library" },
   { cmd: "duplicates", label: "Find duplicates", btn: "find-duplicates", group: "Library" },
+  { cmd: "tidy", label: "Tidy file names", btn: "tidy-open", group: "Library" },
   { cmd: "organize", label: "Organize by artist", btn: "organize-by-artist", group: "Library" },
   { cmd: "playlist", label: "Add to playlist", btn: "playlist-menu", group: "Library" },
   { cmd: "convert", label: "Convert format", btn: "convert-menu", group: "Library" },
@@ -2728,6 +2735,7 @@ function makeModalAccessible(backdrop) {
   "tags-backdrop", "ipod-backdrop", "queue-backdrop", "trash-backdrop",
   "stats-backdrop", "help-backdrop", "about-backdrop", "lyrics-backdrop",
   "radio-backdrop", "export-backdrop", "smart-playlist-backdrop", "welcome-backdrop",
+  "tidy-backdrop",
 ].forEach((id) => { const backdrop = el(id); if (backdrop) makeModalAccessible(backdrop); });
 
 // ------------------------------------------------------------- first run --
@@ -3452,6 +3460,18 @@ el("trash-empty-btn").addEventListener("click", async () => {
 });
 
 // ----------------------------------------------------------------------- stats --
+// "5 min ago" / "yesterday" / a date -- last_played_at is stored as UTC.
+function statsWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso.replace(" ", "T") + "Z");
+  if (isNaN(d)) return "";
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 24 * 60) return `${Math.round(mins / 60)} h ago`;
+  if (mins < 48 * 60) return "yesterday";
+  return d.toLocaleDateString([], { dateStyle: "medium" });
+}
 el("open-stats").addEventListener("click", async () => {
   el("stats-backdrop").classList.remove("hidden");
   el("stats-body").innerHTML = "Loading…";
@@ -3465,6 +3485,9 @@ el("open-stats").addEventListener("click", async () => {
   html += `</div></div>`;
   html += `<div class="tag-issue-section"><div class="tag-issue-header"><span>Top artists</span></div><div class="tag-issue-list">`;
   html += rowsHtml(data.top_artists, (a) => `<div class="tag-issue-row"><div class="tag-issue-info">${escapeHtml(a.artist || "Unknown")}</div><span>${a.plays}×</span></div>`);
+  html += `</div></div>`;
+  html += `<div class="tag-issue-section"><div class="tag-issue-header"><span>Recently played</span></div><div class="tag-issue-list">`;
+  html += rowsHtml(data.recently_played || [], (t) => `<div class="tag-issue-row"><div class="tag-issue-info">${escapeHtml(t.artist || "")} — ${escapeHtml(t.title || "")}</div><span>${escapeHtml(statsWhen(t.last_played_at))}</span></div>`);
   html += `</div></div>`;
   el("stats-body").innerHTML = html;
 });

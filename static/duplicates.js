@@ -145,6 +145,7 @@ el("dup-clean-btn").addEventListener("click", async () => {
     return;
   }
   dupState.anyDeleted = true;
+  if (typeof refreshTidyHint === "function") refreshTidyHint();  // the kept copy may now be free to take its plain name
   btn.classList.add("hidden");
   progressEl.classList.add("hidden");
   if (status.error) {
@@ -286,6 +287,7 @@ function renderDupReviewGroup(group) {
         return;
       }
       dupState.anyDeleted = true;
+      if (typeof refreshTidyHint === "function") refreshTidyHint();  // the kept copy may now be free to take its plain name
       dupReviewForgetTrack(t.id);
       row.remove();
       if (list.children.length <= 1) card.classList.add("dup-review-resolved");
@@ -371,6 +373,7 @@ el("dup-review-delete-selected").addEventListener("click", async () => {
     return;
   }
   dupState.anyDeleted = true;
+  if (typeof refreshTidyHint === "function") refreshTidyHint();  // the kept copy may now be free to take its plain name
   ids.forEach((id) => {
     const row = el("dup-review-list").querySelector(`.dup-review-track[data-track-id="${id}"]`);
     if (!row) return;

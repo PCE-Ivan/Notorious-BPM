@@ -123,6 +123,17 @@ class BrowseRoutesTest(unittest.TestCase):
         conn.close()
         self.assertIn("idx_tracks_album", names)
 
+    def test_stats_carry_the_play_count(self):
+        # The page printed "undefined×": the query didn't select play_count.
+        tid = self.get("/api/tracks?limit=1")["tracks"][0]["id"]
+        self.client.post(f"/api/plays/{tid}")
+        self.client.post(f"/api/plays/{tid}")
+        data = self.get("/api/stats")
+        self.assertEqual(data["total_plays"], 2)
+        self.assertEqual(data["top_tracks"][0]["id"], tid)
+        self.assertEqual(data["top_tracks"][0]["play_count"], 2)
+        self.assertTrue(data["recently_played"][0]["last_played_at"])
+
     def test_bad_paging_is_a_400(self):
         self.assertEqual(self.client.get("/api/albums?limit=lots").status_code, 400)
 

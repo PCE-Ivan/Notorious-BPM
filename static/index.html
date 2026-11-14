@@ -619,9 +619,9 @@
       <button id="shuffle-toggle" class="btn-icon" title="Shuffle (S)" aria-label="Shuffle">🔀</button>
       <button id="repeat-toggle" class="btn-icon" title="Repeat: off (R)" aria-label="Repeat: off">🔁</button>
       <button id="sleep-btn" class="btn-icon" title="Sleep timer" aria-label="Sleep timer">🌙</button>
-      <label class="autoplay-toggle">
+      <label class="autoplay-toggle" title="When the list ends, keep playing tracks similar to the last one">
         <input type="checkbox" id="autoplay-similar">
-        Auto-play similar next
+        Auto-play similar
       </label>
       <audio id="audio" preload="metadata"></audio>
       <input id="seek" type="range" min="0" max="100" value="0" class="seek">
@@ -723,6 +723,14 @@
           <button id="dup-audio-review" class="btn-primary hidden">Review matches</button>
         </div>
         <p class="dup-summary-note"><span id="dup-dismissed-note"></span> <button id="dup-dismissed-reset" class="link-btn hidden">Show them again</button></p>
+      </div>
+
+      <div class="dup-audio">
+        <h4>Leftover copy numbers in file names</h4>
+        <p id="tidy-text" class="dup-summary-note">After duplicates are removed, the copy that was kept can still be called “Song (2).mp3”. This gives it its plain name back.</p>
+        <div class="dup-audio-actions">
+          <button id="tidy-open" class="btn-secondary">Tidy file names…</button>
+        </div>
       </div>
     </div>
   </div>
@@ -979,6 +987,25 @@
   </div>
 </div>
 
+<div id="tidy-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>Tidy file names</h3>
+      <button id="tidy-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p id="tidy-summary" class="dup-summary-text">Looking for leftover copy numbers…</p>
+      <label id="tidy-all-row" class="tidy-all hidden"><input type="checkbox" id="tidy-all" checked> <span id="tidy-all-label">Select all</span></label>
+      <div id="tidy-list" class="tidy-list hidden"></div>
+      <div id="tidy-actions" class="tidy-actions hidden">
+        <button id="tidy-apply" class="btn-primary hidden">Rename</button>
+        <span id="tidy-note" class="dup-summary-note hidden">Only the file's name changes — ratings, playlists and tags stay as they are. You can undo it from History.</span>
+      </div>
+      <div id="tidy-blocked" class="tidy-blocked hidden"></div>
+    </div>
+  </div>
+</div>
+
 <div id="sleep-menu" class="context-menu hidden" role="menu" aria-label="Sleep timer">
   <button class="context-menu-item" role="menuitem" data-minutes="15">15 minutes</button>
   <button class="context-menu-item" role="menuitem" data-minutes="30">30 minutes</button>
@@ -1116,6 +1143,22 @@
         cover art, with a one-click Deezer lookup for missing genres.
         Duplicates finds Live/Remastered/Mix versions of the same song and
         helps you clean them up, keeping the original album version.
+      </p>
+      <p>
+        After a cleanup, the copy that was kept can still be called
+        “Song (2).mp3”. <b>Tidy file names</b> (at the bottom of the
+        Duplicates panel, or type <kbd>/</kbd>tidy) shows every such file
+        and its plain name, and renames the ones you tick. It never touches
+        a number that belongs to the title (“Perfect 10”), never overwrites
+        another file, and can be undone from History.
+      </p>
+
+      <h4>🌙 Sleep timer · 🔁 Repeat · picking up where you left off</h4>
+      <p>
+        The moon button fades playback out after 15–60 minutes or at the
+        end of the track. Repeat cycles off → whole list → this track.
+        Quit any time: the track, its position, the queue and your
+        shuffle/repeat settings are back, paused, on the next launch.
       </p>
 
       <h4>Playlists vs. Smart Playlists</h4>
@@ -1301,5 +1344,6 @@
 <script src="health.js"></script>
 <script src="history.js"></script>
 <script src="session.js"></script>
+<script src="tidy.js"></script>
 </body>
 </html>

@@ -533,7 +533,9 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
 .player-bar {
   flex-shrink: 0;
   display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) minmax(0, auto);
+  /* The first column holds art + two buttons (~140px) before any text: at the old
+     220px cap the title got ~70px ("Glass M…"). */
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr) minmax(0, auto);
   align-items: center;
   gap: 16px;
   padding: 10px 16px;
@@ -562,7 +564,7 @@ button:focus-visible, .tile:focus-visible, .track-row:focus-visible, a:focus-vis
   flex-shrink: 0;
 }
 .btn-icon:hover { filter: brightness(1.15); }
-.seek { flex: 1; min-width: 60px; max-width: 320px; }
+.seek { flex: 1; min-width: 110px; max-width: 320px; }
 .time-display { color: var(--text-dim); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
 .autoplay-toggle { font-size: 11px; color: var(--text-dim); white-space: nowrap; display: flex; align-items: center; gap: 4px; }
 .volume-control { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
@@ -2321,6 +2323,23 @@ body[data-layout="row-density"] .track-row { height: 30px; }
 .dup-review-match { font-weight: 400; color: var(--text-dim); font-size: 11px; margin-left: 6px; }
 .dup-review-track-file { font-size: 11px; color: var(--text-dim); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dup-review-track.best .dup-review-track-title::after { content: "  ★ best quality"; color: var(--accent); font-size: 11px; font-weight: 400; }
+/* Tidy file names: old name struck through, new name under it */
+.tidy-all { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); margin: 0 0 8px; cursor: pointer; }
+.tidy-list { border: 1px solid var(--border); border-radius: var(--radius); max-height: 44vh; overflow-y: auto; }
+.tidy-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.tidy-row:last-child { border-bottom: none; }
+.tidy-row:hover { background: var(--bg-hover); }
+.tidy-row input { margin-top: 3px; flex-shrink: 0; }
+.tidy-names { min-width: 0; flex: 1; font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.tidy-old { color: var(--text-dim); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-dim) 60%, transparent); }
+.tidy-new { color: var(--text); font-weight: 600; }
+.tidy-row.tidy-done { cursor: default; opacity: .6; }
+.tidy-row.tidy-failed .tidy-new { color: var(--danger); font-weight: 400; }
+.tidy-actions { display: flex; align-items: center; gap: 12px; margin: 14px 0 18px; flex-wrap: wrap; }
+.tidy-actions .dup-summary-note { flex: 1; min-width: 200px; }
+.tidy-blocked { margin-top: 4px; font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+.tidy-blocked b { color: var(--text); font-weight: 600; }
+.tidy-blocked ul { margin: 6px 0 0; padding-left: 18px; }
 .link-btn { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .verify-audio-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
