@@ -28,12 +28,14 @@ function revealNavRow(ctx, idx) {
   if (ctx.windowed) {
     if (!vwin.rowH) return;
     const hostTop = libraryHost().getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    // Clear of the sticky column headers above and the floating selection bar below.
     const bar = el("selection-toolbar");
-    const topInset = (bar && !bar.classList.contains("hidden") ? bar.offsetHeight + 8 : 0) + 6;
+    const topInset = (el("track-head") ? el("track-head").offsetHeight : 0) + 6;
+    const bottomInset = bar && !bar.classList.contains("hidden") ? 64 : 6;
     const top = hostTop + idx * vwin.rowH;
     const bottom = top + vwin.rowH;
     if (top < scroller.scrollTop + topInset) scroller.scrollTop = Math.max(0, top - topInset);
-    else if (bottom > scroller.scrollTop + scroller.clientHeight - 6) scroller.scrollTop = bottom - scroller.clientHeight + 6;
+    else if (bottom > scroller.scrollTop + scroller.clientHeight - bottomInset) scroller.scrollTop = bottom - scroller.clientHeight + bottomInset;
     renderLibraryWindow();
     if (idx > ctx.rows.length - 25) loadTracks(false);  // nearing the end of what's loaded
   } else {

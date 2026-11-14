@@ -19,7 +19,7 @@
         hardware. A quick tour of what's here:
       </p>
       <ul class="welcome-list">
-        <li><b>Four player skins</b> — pick from the Theme menu up top: Hi-Fi
+        <li><b>Four player skins</b> — pick one from the View menu up top: Hi-Fi
           (a real VU meter), Cassette (spinning reels), Vinyl (a tracking
           tonearm), or a clean Default/Graphite view. Switch anytime.</li>
         <li><b>Library tools</b> in the toolbar — Tag checker, Duplicate
@@ -111,21 +111,12 @@
 
       <div class="topbar-divider"></div>
 
-      <div class="topbar-group topbar-appearance" title="Toolbar, filters &amp; track list arrangement">
-        <label class="topbar-group-label" for="layout-select">Layout</label>
-        <select id="layout-select" class="theme-select">
-          <option value="classic">Classic</option>
-          <option value="command-bar">Command Bar</option>
-          <option value="grouped-ribbon">Grouped Ribbon</option>
-          <option value="row-density">Row-First Density</option>
-        </select>
-      </div>
-
-      <div class="topbar-divider"></div>
-
-      <div class="topbar-group topbar-appearance" title="Player theme and stage controls">
-        <label class="topbar-group-label" for="theme-select">Theme</label>
-        <select id="theme-select" class="theme-select">
+      <div class="topbar-group view-menu-group">
+        <button id="view-menu-btn" class="btn-secondary topbar-action-btn" title="Layout, player theme and settings" aria-haspopup="true" aria-expanded="false">🎨 View ▾</button>
+        <div id="view-menu" class="view-menu hidden">
+          <div class="view-menu-row">
+            <label for="theme-select">Player theme</label>
+            <select id="theme-select" class="theme-select">
           <option value="system">Match system</option>
           <option value="default">Default</option>
           <option value="graphite">Graphite</option>
@@ -133,7 +124,10 @@
           <option value="cassette">Cassette</option>
           <option value="vinyl">Vinyl</option>
         </select>
-        <span id="wood-select-wrap" class="select-with-swatch hidden">
+          </div>
+          <div class="view-menu-row view-menu-finish">
+            <span class="view-menu-label">Finish</span>
+            <span id="wood-select-wrap" class="select-with-swatch hidden">
           <span id="wood-select-swatch" class="color-swatch" aria-hidden="true"></span>
           <select id="wood-select" class="theme-select" title="Turntable wood finish">
             <option value="walnut">Walnut</option>
@@ -141,7 +135,7 @@
             <option value="mahogany">Mahogany</option>
           </select>
         </span>
-        <span id="cassette-design-select-wrap" class="select-with-swatch hidden">
+            <span id="cassette-design-select-wrap" class="select-with-swatch hidden">
           <span id="cassette-design-select-swatch" class="color-swatch" aria-hidden="true"></span>
           <select id="cassette-design-select" class="theme-select" title="Cassette shell design">
             <option value="blue">Sky Blue Ribbon</option>
@@ -149,7 +143,7 @@
             <option value="rust">Rust on Bone</option>
           </select>
         </span>
-        <span id="vu-color-select-wrap" class="select-with-swatch hidden">
+            <span id="vu-color-select-wrap" class="select-with-swatch hidden">
           <span id="vu-color-select-swatch" class="color-swatch" aria-hidden="true"></span>
           <select id="vu-color-select" class="theme-select" title="VU meter lighting">
             <option value="amber">Amber</option>
@@ -157,6 +151,21 @@
             <option value="green">Green</option>
           </select>
         </span>
+          </div>
+          <div class="view-menu-row">
+            <label for="layout-select">Track list</label>
+            <select id="layout-select" class="theme-select">
+              <option value="classic">Comfortable</option>
+              <option value="row-density">Compact</option>
+            </select>
+          </div>
+          <div class="view-menu-divider"></div>
+          <label class="view-menu-check" for="ratings-in-files">
+            <input type="checkbox" id="ratings-in-files">
+            <span>Save ratings inside the music files</span>
+          </label>
+          <p class="view-menu-note">Ratings then travel with the files, so another computer (or another player) sees them too. Turning this on writes your existing ratings into the files once.</p>
+        </div>
         <button id="focus-mode-btn" class="btn-icon stage-toolbtn hidden" title="Focus mode — hide everything but the player" aria-label="Focus mode">⤢</button>
         <button id="popout-btn" class="btn-icon stage-toolbtn hidden" title="Pop out as a floating player" aria-label="Pop out as a floating player">⧉</button>
       </div>
@@ -207,11 +216,11 @@
     <aside class="sidebar">
       <div id="sidebar-filters-wrap">
       <div class="filter-group">
-        <label for="filter-genre">Genre <span class="filter-hint">(cmd/ctrl-click for multiple)</span></label>
+        <label for="filter-genre">Genre</label>
         <select id="filter-genre" multiple size="4"></select>
       </div>
       <div class="filter-group">
-        <label for="filter-decade">Decade <span class="filter-hint">(cmd/ctrl-click for multiple)</span></label>
+        <label for="filter-decade">Decade</label>
         <select id="filter-decade" multiple size="4"></select>
       </div>
       <div class="filter-group">
@@ -243,7 +252,9 @@
           <option value="artist">Artist</option>
           <option value="genre">Genre</option>
           <option value="title">Title</option>
+          <option value="album">Album</option>
           <option value="year">Year</option>
+          <option value="duration">Length</option>
           <option value="rating">Rating</option>
         </select>
       </div>
@@ -275,15 +286,6 @@
     </aside>
 
     <main class="main" id="main-scroll">
-      <div id="selection-toolbar" class="selection-toolbar hidden">
-        <span id="selection-count">0 selected</span>
-        <button id="selection-add-to-playlist" class="btn-small">+ Add to playlist</button>
-        <button id="selection-queue" class="btn-small">▸ Add to queue</button>
-        <button id="selection-edit-tags" class="btn-small">🏷 Edit tags</button>
-        <button id="selection-convert" class="btn-small">⇄ Convert</button>
-        <button id="selection-clear" class="btn-small btn-secondary">Clear</button>
-      </div>
-
       <div id="playlist-view" class="playlist-view hidden">
         <div class="playlist-view-header">
           <button id="back-to-library" class="btn-small">&larr; Library</button>
@@ -304,9 +306,38 @@
           <select id="grid-sort" class="grid-sort hidden" aria-label="Sort"></select>
           <span id="album-chip" class="filter-chip hidden"></span>
         </div>
+        <div id="track-head" class="track-head" role="row">
+          <span class="col-check"></span><span class="col-art"></span><span class="col-idx">#</span>
+          <button class="th col-title" data-sort="title">Title</button>
+          <button class="th col-artist" data-sort="artist">Artist</button>
+          <button class="th col-album" data-sort="album">Album</button>
+          <button class="th col-genre" data-sort="genre">Genre</button>
+          <button class="th col-year" data-sort="year">Year</button>
+          <button class="th col-time" data-sort="duration">Time</button>
+          <button class="th col-rating" data-sort="rating">Rating</button>
+          <span class="col-queue"></span><span class="col-add"></span><span class="col-lookup"></span>
+        </div>
         <div id="track-list" class="track-list"></div>
         <div id="grid-view" class="grid-view hidden"></div>
         <div id="load-sentinel" class="load-sentinel"></div>
+      </div>
+
+      <!-- Floats over the bottom of the list (a zero-height sticky anchor), so
+           selecting a track never shoves the list down. -->
+      <div id="selection-toolbar" class="selection-toolbar hidden">
+        <div class="selection-toolbar-inner">
+          <span id="selection-count">0 selected</span>
+          <button id="selection-add-to-playlist" class="btn-small">+ Playlist</button>
+          <button id="selection-queue" class="btn-small">▸ Queue</button>
+          <button id="selection-edit-tags" class="btn-small">🏷 Edit tags</button>
+          <button id="selection-convert" class="btn-small">⇄ Convert</button>
+          <span id="selection-rate" class="selection-rate" title="Rate every selected track" role="group" aria-label="Rate the selection">
+            <button data-rate="1" aria-label="1 star">★</button><button data-rate="2" aria-label="2 stars">★</button><button data-rate="3" aria-label="3 stars">★</button><button data-rate="4" aria-label="4 stars">★</button><button data-rate="5" aria-label="5 stars">★</button>
+            <button data-rate="0" class="selection-rate-clear" title="Clear the rating" aria-label="Clear rating">✕</button>
+          </span>
+          <button id="selection-delete" class="btn-small danger">🗑 Delete</button>
+          <button id="selection-clear" class="btn-small btn-secondary" title="Clear the selection (Esc)">Done</button>
+        </div>
       </div>
     </main>
 
@@ -602,48 +633,49 @@
   </div>
 
   <footer class="player-bar">
-    <div class="now-playing">
-      <img id="np-art" class="np-art hidden" alt="">
-      <div class="np-text">
-        <div class="np-title" id="np-title">Nothing playing</div>
-        <div class="np-sub" id="np-sub"></div>
-      </div>
-      <button id="lyrics-btn" class="btn-icon" title="Lyrics (L)" aria-label="Lyrics">📜</button>
-      <button id="art-fetch-btn" class="btn-icon hidden" title="Fetch cover art" aria-label="Fetch cover art">🖼</button>
-      <button id="radio-identify-btn" class="btn-icon hidden" title="Identify this song (Shazam-style, via AcoustID)" aria-label="Identify this song">🔍</button>
-    </div>
-    <div class="player-controls">
-      <button id="prev-track" class="btn-icon" title="Previous (P)" aria-label="Previous">⏮</button>
-      <button id="play-pause" class="btn-icon" title="Play/Pause (Space)" aria-label="Play/Pause">▶</button>
-      <button id="skip-next" class="btn-icon" title="Next (N)" aria-label="Next">⏭</button>
-      <button id="shuffle-toggle" class="btn-icon" title="Shuffle (S)" aria-label="Shuffle">🔀</button>
-      <button id="repeat-toggle" class="btn-icon" title="Repeat: off (R)" aria-label="Repeat: off">🔁</button>
-      <button id="sleep-btn" class="btn-icon" title="Sleep timer" aria-label="Sleep timer">🌙</button>
-      <label class="autoplay-toggle" title="When the list ends, keep playing tracks similar to the last one">
-        <input type="checkbox" id="autoplay-similar">
-        Auto-play similar
-      </label>
-      <audio id="audio" preload="metadata"></audio>
-      <input id="seek" type="range" min="0" max="100" value="0" class="seek">
+    <div class="player-seek-row">
+      <input id="seek" type="range" min="0" max="100" value="0" class="seek" aria-label="Position in the track">
       <span id="time-display" class="time-display">0:00 / 0:00</span>
-      <span class="volume-control" title="Volume">
-        <span id="volume-icon">🔊</span>
-        <input id="volume-slider" type="range" min="0" max="100" value="100">
+    </div>
+    <div class="player-main">
+      <div class="now-playing">
+        <img id="np-art" class="np-art hidden" alt="">
+        <div class="np-text">
+          <div class="np-title" id="np-title">Nothing playing</div>
+          <div class="np-sub" id="np-sub"></div>
+        </div>
+        <button id="lyrics-btn" class="btn-icon" title="Lyrics (L)" aria-label="Lyrics">📜</button>
+        <button id="art-fetch-btn" class="btn-icon hidden" title="Fetch cover art" aria-label="Fetch cover art">🖼</button>
+        <button id="radio-identify-btn" class="btn-icon hidden" title="Identify this song (Shazam-style, via AcoustID)" aria-label="Identify this song">🔍</button>
+      </div>
+      <div class="player-controls">
+        <button id="shuffle-toggle" class="btn-icon btn-quiet" title="Shuffle (S)" aria-label="Shuffle">🔀</button>
+        <button id="prev-track" class="btn-icon" title="Previous (P)" aria-label="Previous">⏮</button>
+        <button id="play-pause" class="btn-icon btn-play" title="Play/Pause (Space)" aria-label="Play/Pause">▶</button>
+        <button id="skip-next" class="btn-icon" title="Next (N)" aria-label="Next">⏭</button>
+        <button id="repeat-toggle" class="btn-icon btn-quiet" title="Repeat: off (R)" aria-label="Repeat: off">🔁</button>
+        <audio id="audio" preload="metadata"></audio>
+      </div>
+      <div class="rating-controls">
+        <button id="autoplay-btn" class="btn-icon btn-quiet" title="Auto-play similar tracks when the list ends" aria-label="Auto-play similar tracks" aria-pressed="false">∞</button>
+        <input type="checkbox" id="autoplay-similar" hidden>
+        <button id="sleep-btn" class="btn-icon btn-quiet" title="Sleep timer" aria-label="Sleep timer">🌙</button>
         <button id="level-btn" class="btn-icon level-btn" title="Level volume across tracks — turns loud tracks down toward a common loudness (measured once, in the background)" aria-label="Level volume across tracks">⚖</button>
-      </span>
-      <button id="airplay-btn" class="btn-icon hidden" title="Stream to AirPlay device">
+        <button id="airplay-btn" class="btn-icon hidden" title="Stream to AirPlay device">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"/>
           <polygon points="12 15 17 21 7 21 12 15"/>
         </svg>
       </button>
-    </div>
-    <div class="rating-controls">
-      <button id="queue-btn" class="btn-small" title="Up next (Q)">Queue</button>
-      <span class="rate-label">Rate:</span>
-      <span id="stars" class="stars" title="Rate the current track (1-5) -- press the same number again to clear it">
+        <span class="volume-control" title="Volume">
+          <span id="volume-icon">🔊</span>
+          <input id="volume-slider" type="range" min="0" max="100" value="100" aria-label="Volume">
+        </span>
+        <button id="queue-btn" class="btn-small" title="Up next (Q)">Queue</button>
+        <span id="stars" class="stars" title="Rate the current track (1-5) -- press the same number again to clear it">
         <span data-star="1">★</span><span data-star="2">★</span><span data-star="3">★</span><span data-star="4">★</span><span data-star="5">★</span>
       </span>
+      </div>
     </div>
   </footer>
 </div>
@@ -665,6 +697,13 @@
 <div id="track-context-menu" class="context-menu hidden">
   <button id="ctx-play" class="context-menu-item">▶ Play</button>
   <button id="ctx-queue-next" class="context-menu-item">▸ Play next</button>
+  <div class="context-menu-divider"></div>
+  <div id="ctx-rate" class="context-menu-rate" role="group" aria-label="Rate">
+    <button data-rate="1" aria-label="1 star">★</button><button data-rate="2" aria-label="2 stars">★</button><button data-rate="3" aria-label="3 stars">★</button><button data-rate="4" aria-label="4 stars">★</button><button data-rate="5" aria-label="5 stars">★</button>
+    <button data-rate="0" class="selection-rate-clear" title="Clear the rating" aria-label="Clear rating">✕</button>
+  </div>
+  <button id="ctx-go-artist" class="context-menu-item">👤 Go to artist</button>
+  <button id="ctx-go-album" class="context-menu-item">💿 Go to album</button>
   <div class="context-menu-divider"></div>
   <button id="ctx-add-playlist" class="context-menu-item">+ Add to playlist</button>
   <button id="ctx-edit-tags" class="context-menu-item">🏷 Edit tags</button>
@@ -994,6 +1033,15 @@
       <button id="tidy-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body">
+      <div class="tidy-mode">
+        <label for="tidy-mode">What to do</label>
+        <select id="tidy-mode" class="theme-select">
+          <option value="copy-numbers">Remove leftover copy numbers — “Song (2).mp3”</option>
+          <option value="artist-title">Rename every file to: Artist - Title</option>
+          <option value="artist-album-title">Rename every file to: Artist - Album - Title</option>
+          <option value="title">Rename every file to: Title</option>
+        </select>
+      </div>
       <p id="tidy-summary" class="dup-summary-text">Looking for leftover copy numbers…</p>
       <label id="tidy-all-row" class="tidy-all hidden"><input type="checkbox" id="tidy-all" checked> <span id="tidy-all-label">Select all</span></label>
       <div id="tidy-list" class="tidy-list hidden"></div>
@@ -1153,6 +1201,30 @@
         another file, and can be undone from History.
       </p>
 
+      <h4>🗂 The track list</h4>
+      <p>
+        Click a column heading to sort by it, and again to reverse. Tick
+        tracks (or <kbd>⌘</kbd>-click, <kbd>⇧</kbd>-click) and a bar appears
+        at the bottom of the list to add them to a playlist or the queue,
+        edit tags, rate them all, or delete them. Right-click a track to
+        rate it or jump to its artist or album. Layout, player theme and
+        settings are under <b>View</b>.
+      </p>
+      <p>
+        <b>Rescan</b> only re-reads files that changed, so it is quick; a
+        file you renamed or moved in Finder keeps its rating and playlists.
+        <kbd>⇧</kbd>-click Rescan to re-read every file.
+      </p>
+      <p>
+        <b>Save ratings inside the music files</b> (in View) writes each
+        rating into the file's own tags, so a second computer with its own
+        library — or another player — sees the same stars.
+      </p>
+      <p>
+        <b>Tidy file names</b> can also rename every file from its tags,
+        to “Artist - Title” and similar patterns.
+      </p>
+
       <h4>🌙 Sleep timer · 🔁 Repeat · picking up where you left off</h4>
       <p>
         The moon button fades playback out after 15–60 minutes or at the
@@ -1210,6 +1282,7 @@
       <button id="about-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="dup-body about-body">
+      <p id="about-version" class="about-version">Version <b id="about-version-number">…</b> <span id="about-update" class="dup-summary-note"></span></p>
       <p class="about-copyright">© 2026 Ivan Pecek. All rights reserved.</p>
       <p>
         Notorious B.P.M. is donationware: free to use, not for resale or
@@ -1332,6 +1405,7 @@
   </div>
 </div>
 
+<script src="icons.js"></script>
 <script src="app.js"></script>
 <script src="ipod.js"></script>
 <script src="tagcheck.js"></script>
@@ -1345,5 +1419,6 @@
 <script src="history.js"></script>
 <script src="session.js"></script>
 <script src="tidy.js"></script>
+<script src="shell.js"></script>
 </body>
 </html>

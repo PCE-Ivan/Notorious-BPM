@@ -169,10 +169,50 @@ def build_schema(conn):
     if "language" not in cols:
         conn.execute("ALTER TABLE tracks ADD COLUMN language TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_language ON tracks(language)")
+    # What the file looked like when its tags were last read -- lets a rescan
+    # skip every file that hasn't changed, and recognise one that was renamed.
+    if "file_mtime" not in cols:
+        conn.execute("ALTER TABLE tracks ADD COLUMN file_mtime REAL")
+    if "file_size" not in cols:
+        conn.execute("ALTER TABLE tracks ADD COLUMN file_size INTEGER")
     conn.commit()
 
 
-def scan(progress_cb=None, force_prune=False):
+def _same(a, b):
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
+
+
+class _MovedIndex:
+    """Rows whose file is gone from where the library last saw it. A file
+    that turns up somewhere new is checked against these: same format, same
+    length, and either the same size on disk or the same artist/title/album
+    means it is that track, renamed or moved outside the app -- so its row
+    (and with it the rating, playlists and play count) is repointed instead
+    of being deleted and re-added as a stranger. Only an unambiguous match
+    counts; two candidates means no match."""
+
+    def __init__(self, rows):
+        self.rows = [dict(r) for r in rows]
+
+    def claim(self, fields, size):
+        hits = []
+        for row in self.rows:
+            if row.get("claimed") or (row["ext"] or "").lower() != (fields["ext"] or "").lower():
+                continue
+            if row["duration"] is None or fields["duration"] is None or abs(row["duration"] - fields["duration"]) > 0.05:
+                continue
+            same_size = row["file_size"] is not None and row["file_size"] == size
+            same_tags = _same(row["title"], fields["title"]) and _same(row["artist"], fields["artist"]) \
+                and _same(row["album"], fields["album"])
+            if same_size or same_tags:
+                hits.append(row)
+        if len(hits) != 1:
+            return None
+        hits[0]["claimed"] = True
+        return hits[0]
+
+
+def scan(progress_cb=None, force_prune=False, full=False, read_ratings=False):
     """progress_cb(done, total), called after every file -- lets a caller
     (app.py's /api/choose-folder and /api/rescan, both of which used to
     block silently for the whole scan with zero feedback) show live
@@ -184,7 +224,12 @@ def scan(progress_cb=None, force_prune=False):
     force_prune=True bypasses the >20%-removal safety guard below for this
     one explicit run -- for a caller that's already shown the user the
     guard's warning and gotten explicit confirmation this is expected
-    (e.g. a real reorganization), not something to ever default to."""
+    (e.g. a real reorganization), not something to ever default to.
+
+    A file whose size and modified time are what they were when its tags
+    were last read is skipped -- nothing about it can have changed -- which
+    turns a rescan of an untouched library from minutes into a directory
+    walk. full=True re-reads every file regardless."""
     if not MUSIC_DIR or not os.path.isdir(MUSIC_DIR):
         raise RuntimeError(f"Music directory not set or not found: {MUSIC_DIR}")
 
@@ -193,8 +238,9 @@ def scan(progress_cb=None, force_prune=False):
     build_schema(conn)
     cur = conn.cursor()
 
-    cur.execute("SELECT path FROM tracks")
-    existing_paths = {row[0] for row in cur.fetchall()}
+    cur.execute("SELECT path, file_mtime, file_size FROM tracks")
+    known = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+    existing_paths = set(known)
     seen_paths = set()
 
     candidates = []  # (fpath, rel, root, fname)
@@ -219,8 +265,43 @@ def scan(progress_cb=None, force_prune=False):
     inserted = 0
     updated = 0
     skipped = 0
+    unchanged = 0
+    moved = 0
     done = 0
     t0 = time.time()
+
+    # Everything on disk is known before a single tag is read, so what has
+    # gone missing is too -- which is what a newly-found file gets compared
+    # against (see _MovedIndex).
+    removed_paths = existing_paths - {c[1] for c in candidates}
+    moved_index = None
+    if removed_paths:
+        gone = [r for r in conn.execute(
+            "SELECT id, path, artist, album, title, duration, ext, file_size FROM tracks").fetchall()
+            if r[1] in removed_paths]
+        moved_index = _MovedIndex(
+            [dict(zip(("id", "path", "artist", "album", "title", "duration", "ext", "file_size"), r)) for r in gone])
+
+    stats_by_rel = {}
+    to_read = []
+    for candidate in candidates:
+        fpath, rel = candidate[0], candidate[1]
+        try:
+            st = os.stat(fpath)
+            stat = (st.st_mtime, st.st_size)
+        except OSError:
+            stat = (None, None)
+        stats_by_rel[rel] = stat
+        was = known.get(rel)
+        if (not full and was and was[0] is not None and stat[0] is not None
+                and abs(was[0] - stat[0]) < 0.001 and was[1] == stat[1]):
+            seen_paths.add(rel)
+            unchanged += 1
+            done += 1
+        else:
+            to_read.append(candidate)
+    if progress_cb and unchanged:
+        progress_cb(done, total)
 
     stop = threading.Event()
 
@@ -265,11 +346,17 @@ def scan(progress_cb=None, force_prune=False):
         bpm = parse_bpm(tags)
         duration = getattr(audio.info, "length", None) if audio.info else None
         language = detect_language(title, artist, album)
+        file_rating = 0
+        if read_ratings:
+            # "Save ratings inside the music files" is on: a rating the file
+            # carries (set on another computer) comes into this library.
+            import rating_tags
+            file_rating = rating_tags.read(fpath)
 
         return {
             "rel": rel, "ext": ext, "artist": artist, "album": album, "title": title,
             "genre": genre, "primary_genre": primary_genre, "year": year, "decade": decade,
-            "bpm": bpm, "duration": duration, "language": language,
+            "bpm": bpm, "duration": duration, "language": language, "file_rating": file_rating,
         }
 
     # The actual file open + tag parse is the slow part and fully
@@ -279,7 +366,7 @@ def scan(progress_cb=None, force_prune=False):
     # before.
     try:
         with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
-            futures = {pool.submit(_extract, c): c for c in candidates}
+            futures = {pool.submit(_extract, c): c for c in to_read}
             for future in as_completed(futures):
                 fpath, rel, root, fname = futures[future]
                 seen_paths.add(rel)
@@ -296,24 +383,40 @@ def scan(progress_cb=None, force_prune=False):
                     skipped += 1
                     continue
 
+                mtime, size = stats_by_rel.get(rel, (None, None))
+                values = (fields["artist"], fields["album"], fields["title"], fields["genre"],
+                          fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
+                          fields["duration"], fields["ext"], fields["language"], mtime, size)
+                update_sql = """UPDATE tracks SET artist=?, album=?, title=?, genre=?, primary_genre=?,
+                           year=?, decade=?, bpm=?, duration=?, ext=?, language=?, file_mtime=?, file_size=?"""
                 if rel in existing_paths:
-                    cur.execute(
-                        """UPDATE tracks SET artist=?, album=?, title=?, genre=?, primary_genre=?,
-                           year=?, decade=?, bpm=?, duration=?, ext=?, language=? WHERE path=?""",
-                        (fields["artist"], fields["album"], fields["title"], fields["genre"],
-                         fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
-                         fields["duration"], fields["ext"], fields["language"], fields["rel"]),
-                    )
+                    cur.execute(update_sql + " WHERE path=?", values + (fields["rel"],))
                     updated += 1
+                    was = None
+                else:
+                    was = moved_index.claim(fields, size) if moved_index else None
+                if rel in existing_paths:
+                    pass
+                elif was:
+                    # The same track under a new name: keep its row, so its
+                    # rating, playlists and play count come along.
+                    cur.execute(update_sql + ", path=? WHERE id=?", values + (fields["rel"], was["id"]))
+                    removed_paths.discard(was["path"])
+                    moved += 1
                 else:
                     cur.execute(
                         """INSERT INTO tracks (path, artist, album, title, genre, primary_genre,
-                           year, decade, bpm, duration, ext, language) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (fields["rel"], fields["artist"], fields["album"], fields["title"], fields["genre"],
-                         fields["primary_genre"], fields["year"], fields["decade"], fields["bpm"],
-                         fields["duration"], fields["ext"], fields["language"]),
+                           year, decade, bpm, duration, ext, language, file_mtime, file_size)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (fields["rel"],) + values,
                     )
                     inserted += 1
+
+                if fields.get("file_rating"):
+                    cur.execute(
+                        "INSERT INTO ratings (track_id, rating, rated_at) SELECT id, ?, ? FROM tracks WHERE path=? "
+                        "ON CONFLICT(track_id) DO UPDATE SET rating=excluded.rating, rated_at=excluded.rated_at",
+                        (fields["file_rating"], time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), fields["rel"]))
 
                 if (inserted + updated) % 500 == 0:
                     conn.commit()
@@ -333,7 +436,7 @@ def scan(progress_cb=None, force_prune=False):
     if progress_cb:
         progress_cb(done, total)
 
-    removed_paths = existing_paths - seen_paths
+    # (removed_paths was worked out before the pass; files recognised as moved have left it.)
     # A drive that's asleep, unmounted mid-scan, or just slow to respond can
     # make a huge chunk of otherwise-fine files look "missing" -- pruning
     # those would silently wipe them from the library. Refuse to remove more
@@ -345,6 +448,7 @@ def scan(progress_cb=None, force_prune=False):
         and bool(existing_paths)
         and len(removed_paths) > max(50, len(existing_paths) * 0.2)
     )
+    missing = len(removed_paths)
     if suspicious:
         removed_paths = set()
     else:
@@ -355,18 +459,20 @@ def scan(progress_cb=None, force_prune=False):
     conn.close()
 
     elapsed = time.time() - t0
-    print(f"Done in {elapsed:.0f}s: {inserted} new, {updated} updated, "
+    print(f"Done in {elapsed:.0f}s: {inserted} new, {updated} updated, {unchanged} unchanged, {moved} moved, "
           f"{len(removed_paths)} removed, {skipped} skipped.")
     result = {
         "inserted": inserted,
         "updated": updated,
         "removed": len(removed_paths),
         "skipped": skipped,
+        "unchanged": unchanged,
+        "moved": moved,
         "elapsed": round(elapsed, 1),
     }
     if suspicious:
         result["warning"] = (
-            f"{len(existing_paths) - len(seen_paths)} indexed files weren't found on disk this pass "
+            f"{missing} indexed files weren't found on disk this pass "
             "(more than 20% of the library) -- skipped removing them in case a drive was asleep or "
             "unmounted. Re-run once you've confirmed the drive is connected if they're genuinely gone."
         )

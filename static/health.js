@@ -19,6 +19,7 @@ function renderHealth() {
   if (!result.issues.length) {
     box.innerHTML = `<div class="health-ok">All clear.</div>`;
     el("health-repair").disabled = true;
+    el("health-repair").classList.add("hidden");
     return;
   }
   box.innerHTML = result.issues.map((i) => `
@@ -38,6 +39,8 @@ function renderHealth() {
 function updateHealthRepairButton() {
   const n = el("health-issues").querySelectorAll("input[data-repair]:checked").length;
   el("health-repair").disabled = n === 0;
+  // Nothing repairable on the list at all: no button, rather than a dead one.
+  el("health-repair").classList.toggle("hidden", !el("health-issues").querySelector("input[data-repair]"));
   el("health-repair").textContent = n ? `Repair selected (${n})` : "Repair selected";
 }
 

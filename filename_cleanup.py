@@ -106,10 +106,47 @@ def _title_is_real(row, stem):
     return bool(row["title"]) and _norm(row["title"]) != _norm(stem)
 
 
-def plan(rows, music_dir):
+# Naming patterns for "rename to match the tags". Every field a pattern uses
+# must be a real tag on the file, or the file is left alone.
+PATTERNS = {
+    "artist-title": ("Artist - Title", "{artist} - {title}"),
+    "artist-album-title": ("Artist - Album - Title", "{artist} - {album} - {title}"),
+    "title": ("Title", "{title}"),
+}
+_FORBIDDEN_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _safe_part(text):
+    """A tag value as it can appear in a file name on any drive (exFAT and
+    Windows refuse \\ / : * ? " < > |)."""
+    text = unicodedata.normalize("NFC", text or "").replace(":", " -")
+    text = re.sub(r'[*?"<>|\x00-\x1f]', "", text)
+    text = _FORBIDDEN_RE.sub("-", text)
+    return re.sub(r"\s+", " ", text).strip(" .")
+
+
+def pattern_name(filename, pattern_key, artist, album, title, title_is_real):
+    """(new_filename, reason) for a naming pattern, or (None, None)."""
+    if pattern_key not in PATTERNS or not title_is_real:
+        return None, None
+    label, template = PATTERNS[pattern_key]
+    parts = {"artist": _safe_part(artist), "album": _safe_part(album), "title": _safe_part(title)}
+    if any("{%s}" % key in template and not value for key, value in parts.items()):
+        return None, None
+    ext = os.path.splitext(filename)[1]
+    stem = template.format(**parts)[:180].rstrip(" .")
+    new_name = stem + ext.lower()
+    if not stem or new_name == filename:
+        return None, None
+    return new_name, label
+
+
+def plan(rows, music_dir, pattern=None):
     """rows: sqlite3.Row (or dict-like with .keys()) of id, path, title,
-    artist, has_title_tag. Returns {"items": [...], "blocked": [...]} --
-    items can be renamed, blocked ones can't yet (and why)."""
+    artist, album, has_title_tag. Returns {"items": [...], "blocked": [...]}
+    -- items can be renamed, blocked ones can't yet (and why). With no
+    `pattern` this removes leftover copy numbers; with one (a PATTERNS key)
+    it renames every file to that pattern from its tags."""
     known_paths = set()
     candidates = []
     for row in rows:
@@ -117,7 +154,12 @@ def plan(rows, music_dir):
         known_paths.add(rel)
         directory, filename = os.path.split(rel)
         stem = os.path.splitext(filename)[0]
-        new_name, reason = clean_name(filename, row["title"], _title_is_real(row, stem))
+        if pattern:
+            album = row["album"] if "album" in row.keys() else None
+            new_name, reason = pattern_name(filename, pattern, row["artist"], album, row["title"],
+                                            _title_is_real(row, stem))
+        else:
+            new_name, reason = clean_name(filename, row["title"], _title_is_real(row, stem))
         if new_name:
             candidates.append({
                 "id": row["id"], "artist": row["artist"] or "", "title": row["title"] or "",
@@ -132,8 +174,9 @@ def plan(rows, music_dir):
         if not os.path.isfile(os.path.join(music_dir, c["old_path"])):
             continue  # not on disk right now (unplugged drive, already moved): nothing to offer
         key = c["new_path"].lower()
-        if c["new_path"] in known_paths or os.path.lexists(os.path.join(music_dir, c["new_path"])):
-            c["why"] = "A file with the plain name is still there — these two are probably duplicates."
+        case_only = key == c["old_path"].lower()  # "song.MP3" -> "Song.mp3": the "existing" file is this one
+        if not case_only and (c["new_path"] in known_paths or os.path.lexists(os.path.join(music_dir, c["new_path"]))):
+            c["why"] = "A file with that name is already there — these two are probably duplicates."
             blocked.append(c)
         elif key in claimed:
             c["why"] = "Another copy is getting the plain name."
@@ -145,7 +188,7 @@ def plan(rows, music_dir):
     return {"items": sorted(items, key=order), "blocked": sorted(blocked, key=order)}
 
 
-def apply(db_path, music_dir, ids):
+def apply(db_path, music_dir, ids, pattern=None):
     """Renames the planned files whose track id is in `ids`. The plan is
     rebuilt here from the library as it is now -- names from the browser are
     never trusted. Returns {"renamed", "errors", "path_moves"}; path_moves
@@ -157,14 +200,14 @@ def apply(db_path, music_dir, ids):
     try:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
         flag = "has_title_tag" if "has_title_tag" in cols else "NULL AS has_title_tag"
-        rows = conn.execute("SELECT id, path, title, artist, %s FROM tracks" % flag).fetchall()
-        for item in plan(rows, music_dir)["items"]:
+        rows = conn.execute("SELECT id, path, title, artist, album, %s FROM tracks" % flag).fetchall()
+        for item in plan(rows, music_dir, pattern)["items"]:
             if item["id"] not in wanted:
                 continue
             src = os.path.join(music_dir, item["old_path"])
             dst = os.path.join(music_dir, item["new_path"])
             try:
-                if os.path.lexists(dst):
+                if os.path.lexists(dst) and item["new_path"].lower() != item["old_path"].lower():
                     raise OSError("a file with that name appeared in the meantime")
                 safe_move(src, dst)
             except OSError as e:

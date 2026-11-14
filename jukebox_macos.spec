@@ -46,7 +46,7 @@ a = Analysis(
         "webview.menu", "webview.dom", "webview.dom.dom", "webview.dom.element",
         "webview.dom.event", "webview.dom.classlist", "webview.dom.propsdict",
         # app.py imports these at the top; listed anyway so a refactor can't silently drop them
-        "audio_dupes", "loudness", "importer", "local_guard", "filename_cleanup", "organize_by_artist", "art_lookup", "ipod_import",
+        "audio_dupes", "loudness", "importer", "local_guard", "filename_cleanup", "rating_tags", "version", "radio_routes", "organize_by_artist", "art_lookup", "ipod_import",
         "scan_library", "fill_genres", "fill_years", "unify_artist_genre",
         "fix_artist_title", "convert_audio",
         "tkinter", "tkinter.filedialog",
@@ -92,8 +92,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleDisplayName": "Notorious B.P.M.",
         "CFBundleName": "Notorious B.P.M.",
-        "CFBundleShortVersionString": "1.2",
-        "CFBundleVersion": "1.2",
+        "CFBundleShortVersionString": "1.3",
+        "CFBundleVersion": "1.3",
         "LSApplicationCategoryType": "public.app-category.music",
         "LSMinimumSystemVersion": "11.0",
         "LSUIElement": False,

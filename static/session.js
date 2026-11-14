@@ -234,6 +234,7 @@ async function restoreSession() {
     el("shuffle-toggle").classList.toggle("active", state.shuffle);
     el("autoplay-similar").checked = !!saved.autoplay;
     state.autoplaySimilar = !!saved.autoplay;
+    if (typeof syncAutoplayBtn === "function") syncAutoplayBtn();
     setRepeat(saved.repeat);
 
     const library = await libraryId();

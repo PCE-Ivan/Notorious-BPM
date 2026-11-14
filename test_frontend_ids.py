@@ -72,6 +72,17 @@ class FrontendIdsTest(unittest.TestCase):
                 unlabeled.append(ident.group(1) if ident else m.group(0)[:60])
         self.assertEqual(unlabeled, [])
 
+    def test_every_icon_glyph_has_a_drawing(self):
+        src = read("icons.js")
+        paths = set(re.findall(r"^  (\w+): '", src, re.M))
+        mapped = set(re.findall(r'"[^"]+": "(\w+)"', src.split("const ICON_FOR")[1].split("};")[0]))
+        self.assertGreater(len(mapped), 30)
+        self.assertEqual(mapped - paths, set())
+
+    def test_icons_load_before_everything_else(self):
+        order = re.findall(r'<script src="([^"]+\.js)"', self.html)
+        self.assertEqual(order[0], "icons.js")   # app.js builds rows with ICON_SEARCH_HTML
+        self.assertEqual(order[-1], "shell.js")  # shell.js wraps what the others set up
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

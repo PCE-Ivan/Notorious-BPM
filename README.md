@@ -34,7 +34,13 @@ Needs a Mac with **Apple Silicon** (M1 or later) running **macOS 14 or newer**.
 
 **Library**
 - Fast local scan (MP3/FLAC/M4A/WAV/OGG), tag fallback from filenames,
-  language detection; thousands of tracks stay smooth
+  language detection; thousands of tracks stay smooth. A rescan only re-reads
+  files that changed, and a file renamed or moved in Finder keeps its rating
+  and playlists
+- Sortable columns (title, artist, album, genre, year, length, rating), bulk
+  rate / delete, "go to artist / album" from the right-click menu
+- Optional: **save ratings inside the music files**, so they travel to
+  another computer or another player
 - Tracks, Albums and Artists views with cover art; instant search; filter by
   genre/decade/artist/language/rating; regular and smart (rule-based,
   always-live) playlists
@@ -51,7 +57,8 @@ Needs a Mac with **Apple Silicon** (M1 or later) running **macOS 14 or newer**.
   first run is slow
 - **Tidy file names** — after a cleanup the kept copy may still be called
   `Song (2).mp3`; this gives it its plain name back (previewed first, never
-  touches a number that belongs to the title, undoable)
+  touches a number that belongs to the title, undoable). It can also rename
+  every file from its tags (`Artist - Title` and similar)
 - Tag checker with one-click Deezer genre/year lookup; verify tags against the
   audio via AcoustID, for the whole library, resumable
 - Change history with one-click **Undo** for bulk tag edits and file moves;
@@ -113,10 +120,16 @@ pointed at a throwaway directory (never combine test files in one process —
 `app.py` fixes its library paths when first imported). Tests only ever touch
 scratch libraries.
 
+The backend is `app.py` plus one module per job (`scan_library.py`,
+`filename_cleanup.py`, `rating_tags.py`, `audio_dupes.py`, `radio_routes.py`
+— the internet-radio blueprint — and so on); the version lives in
+`version.py`.
+
 `static/` is plain HTML/CSS/JS served by the Flask backend in `app.py`, split
 by feature (`app.js` core + player, `ipod.js`, `tagcheck.js`, `duplicates.js`,
 `radio.js`, `browse.js`, `keys.js`, `activity.js`, `import.js`, `health.js`,
-`history.js`, `session.js`, `tidy.js`) — classic scripts sharing one global scope, loaded in the order
+`history.js`, `session.js`, `tidy.js`, `shell.js`, and `icons.js` — the drawn
+icon set that stands in for emoji) — classic scripts sharing one global scope, loaded in the order
 `index.html` lists them. `test_frontend_syntax.py` and `test_frontend_ids.py`
 catch a script that doesn't parse or an `el("id")` with no matching element.
 

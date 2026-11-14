@@ -2,6 +2,7 @@ const API = "/api";
 
 const state = {
   q: "", genre: "", decade: "", artist: "", album: "", language: "", ratedOnly: false, rating: "", sort: "artist",
+  sortDir: "", // "" = that column's natural direction; "asc" | "desc" once a header is clicked twice (shell.js)
   view: "tracks", // "tracks" | "albums" | "artists" -- see browse.js
   levelVolume: false, // "level volume across tracks" -- turns loud tracks down toward a common loudness
   trackGain: 1, // linear gain (<= 1) for the playing track from that
@@ -186,6 +187,7 @@ function trackQueryParams(extra = {}) {
   if (state.ratedOnly) p.set("rated_only", "1");
   if (state.rating) p.set("rating", state.rating);
   p.set("sort", state.sort);
+  if (state.sortDir) p.set("dir", state.sortDir);
   p.set("limit", state.pageSize);
   p.set("offset", state.offset);
   Object.entries(extra).forEach(([k, v]) => p.set(k, v));
@@ -348,12 +350,14 @@ function buildTrackRow(t, displayIdx, { showAdd, contextList }) {
     <div class="col-idx">${displayIdx}</div>
     <div class="col-title" title="${escapeHtml(t.title || "")}">${escapeHtml(t.title || "")}</div>
     <div class="col-artist" title="${escapeHtml(t.artist || "")}">${escapeHtml(t.artist || "")}</div>
+    <div class="col-album" title="${escapeHtml(t.album || "")}">${escapeHtml(t.album || "")}</div>
     <div class="col-genre" title="${escapeHtml(t.primary_genre || "")}">${escapeHtml(t.primary_genre || "")}</div>
     <div class="col-year">${t.year || ""}</div>
+    <div class="col-time">${t.duration ? fmtTime(t.duration) : ""}</div>
     <div class="col-rating row-stars">${rowStarsHtml(t.rating || 0)}</div>
     <div class="col-queue" title="Play next">▸</div>
     <div class="col-add" title="Add to playlist">${showAdd ? "+" : ""}</div>
-    <div class="col-lookup" title="Look up this track's genre, year, artist &amp; title on Deezer">🔍</div>
+    <div class="col-lookup" title="Look up this track's genre, year, artist &amp; title on Deezer">${ICON_SEARCH_HTML}</div>
   `;
   row.addEventListener("click", (e) => {
     if (e.target.closest(".col-add") || e.target.closest(".col-check") || e.target.closest(".col-queue") || e.target.closest(".row-stars") || e.target.closest(".col-lookup")) return;
@@ -1189,6 +1193,9 @@ const COLLAPSIBLE_FILTER_GROUPS = ["filter-decade", "filter-language", "filter-a
 state.layoutMode = localStorage.getItem("jukebox-layout-mode") || "classic";
 
 function applyLayoutMode(name) {
+  // 1.3 kept two of the four arrangements: Comfortable ("classic") and
+  // Compact ("row-density"). A saved "command-bar"/"grouped-ribbon" opens as Comfortable.
+  if (name !== "row-density") name = "classic";
   state.layoutMode = name;
   try { localStorage.setItem("jukebox-layout-mode", name); } catch (e) { /* private browsing etc -- fine to skip */ }
   api("/layout-mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layoutMode: name }) }).catch(() => {});
@@ -1466,6 +1473,7 @@ async function popOutPlayer() {
 
   const win = await documentPictureInPicture.requestWindow({ width: 360, height: 700 });
   pipWindow = win;
+  if (typeof watchForIcons === "function") watchForIcons(win.document);  // play/pause etc. keep their drawn icons out there too
 
   const link = win.document.createElement("link");
   link.rel = "stylesheet";
@@ -2210,14 +2218,20 @@ el("filter-rating").addEventListener("change", (e) => {
   updateDeleteRatedVisibility();
   loadTracks(true);
 });
-el("sort").addEventListener("change", (e) => { state.sort = e.target.value; loadTracks(true); });
+el("sort").addEventListener("change", (e) => {
+  state.sort = e.target.value;
+  state.sortDir = "";
+  if (typeof updateTrackHead === "function") updateTrackHead();
+  loadTracks(true);
+});
 function clearAllFilters() {
   state.q = ""; state.genre = ""; state.decade = ""; state.language = ""; state.artist = ""; state.album = ""; state.ratedOnly = false; state.rating = ""; state.sort = "artist";
   el("search").value = "";
   Array.from(el("filter-genre").options).forEach((o) => { o.selected = false; });
   Array.from(el("filter-decade").options).forEach((o) => { o.selected = false; });
   el("filter-language").value = ""; el("filter-artist").value = ""; el("filter-rated").checked = false;
-  el("filter-rating").value = ""; el("sort").value = "artist";
+  el("filter-rating").value = ""; el("sort").value = "artist"; state.sortDir = "";
+  if (typeof updateTrackHead === "function") updateTrackHead();
   updateDeleteRatedVisibility();
   if (typeof updateBrowseChrome === "function") updateBrowseChrome();
   loadTracks(true);
@@ -2756,7 +2770,7 @@ el("welcome-dismiss").addEventListener("click", dismissWelcome);
 el("welcome-backdrop").addEventListener("click", (e) => { if (e.target.id === "welcome-backdrop") dismissWelcome(); });
 
 // --------------------------------------------------------------- rescan --
-async function runRescan(forcePrune = false) {
+async function runRescan(forcePrune = false, full = false) {
   const btn = el("rescan-library");
   const original = getTileText(btn);
   setTileText(btn, "Scanning…");
@@ -2765,7 +2779,7 @@ async function runRescan(forcePrune = false) {
     const started = await api("/rescan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ force_prune: forcePrune }),
+      body: JSON.stringify({ force_prune: forcePrune, full }),
     });
     if (!started.started) {
       showToast(started.error === "Already running" ? "A scan is already running." : (started.error || "Couldn't start the scan."), { kind: "error" });
@@ -2793,13 +2807,21 @@ async function runRescan(forcePrune = false) {
     const stats = status.result || {};
     setTileText(btn, `+${stats.inserted || 0} / -${stats.removed || 0}`);
     setTimeout(() => { setTileText(btn, original); }, 3000);
+    {
+      const bits = [];
+      if (stats.inserted) bits.push(`${stats.inserted.toLocaleString()} new`);
+      if (stats.updated) bits.push(`${stats.updated.toLocaleString()} changed`);
+      if (stats.moved) bits.push(`${stats.moved.toLocaleString()} renamed or moved (ratings kept)`);
+      if (stats.removed) bits.push(`${stats.removed.toLocaleString()} removed`);
+      showToast(bits.length ? `Rescan: ${bits.join(", ")}.` : "Rescan: nothing has changed.", { kind: "success" });
+    }
     // The scan deliberately refuses to auto-remove more than ~20% of the
     // index in one pass (a sleeping/disconnected drive could otherwise
     // look like a mass deletion) -- surface that instead of silently
     // saying nothing, with a one-click way to confirm it's expected.
     if (stats.warning) {
       if (await customConfirm(`${stats.warning}\n\nForce cleanup now anyway?`, { okLabel: "Force cleanup", danger: true })) {
-        await runRescan(true);
+        await runRescan(true, full);
       }
     }
   } catch (e) {
@@ -2810,7 +2832,10 @@ async function runRescan(forcePrune = false) {
     hideScanProgress();
   }
 }
-el("rescan-library").addEventListener("click", () => runRescan(false));
+// A normal rescan skips files that haven't changed since last time; Shift- or
+// Option-click re-reads every file (for when tags were edited by something
+// that preserves the modified date).
+el("rescan-library").addEventListener("click", (e) => runRescan(false, e.shiftKey || e.altKey));
 
 // ---------------------------------------------------------------- library --
 // Multiple, independent, switchable libraries -- each just one .nbpmlib
@@ -3479,15 +3504,42 @@ el("open-stats").addEventListener("click", async () => {
   const rowsHtml = (items, render) => items.length
     ? items.map(render).join("")
     : `<div class="tag-issue-row"><div class="tag-issue-info">Nothing played yet.</div></div>`;
-  let html = `<p class="dup-summary-text"><b>${data.total_plays.toLocaleString()}</b> total plays logged.</p>`;
+  const hours = (data.listening_seconds || 0) / 3600;
+  const listened = hours >= 1 ? `${hours.toFixed(hours < 10 ? 1 : 0)} hours` : `${Math.round((data.listening_seconds || 0) / 60)} minutes`;
+  let html = `<p class="dup-summary-text"><b>${data.total_plays.toLocaleString()}</b> plays · about <b>${listened}</b> of listening.</p>`;
+
+  // Last 30 days as bars. Counted from the day this version was first used --
+  // earlier plays are in the totals but were never dated one by one.
+  const days = data.by_day || [];
+  const peak = Math.max(1, ...days.map((d) => d.plays));
+  const monthPlays = days.reduce((n, d) => n + d.plays, 0);
+  html += `<div class="tag-issue-section"><div class="tag-issue-header"><span>Last 30 days</span><span class="stats-chart-total">${monthPlays.toLocaleString()} play${monthPlays === 1 ? "" : "s"}</span></div>`;
+  html += `<div class="stats-chart" role="img" aria-label="Plays per day over the last 30 days">` + days.map((d) => {
+    const when = new Date(d.day + "T12:00:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    return `<div class="stats-bar-slot" title="${when}: ${d.plays} play${d.plays === 1 ? "" : "s"}"><div class="stats-bar${d.plays ? "" : " empty"}" style="height:${d.plays ? Math.max(6, Math.round((d.plays / peak) * 100)) : 2}%"></div></div>`;
+  }).join("") + `</div>`;
+  if (days.length) {
+    const fmt = (iso) => new Date(iso + "T12:00:00").toLocaleDateString([], { day: "numeric", month: "short" });
+    html += `<div class="stats-chart-axis"><span>${fmt(days[0].day)}</span><span>today</span></div>`;
+  }
+  html += `</div>`;
+
+  const genres = data.top_genres || [];
+  if (genres.length) {
+    const top = Math.max(1, ...genres.map((g) => g.plays));
+    html += `<div class="tag-issue-section"><div class="tag-issue-header"><span>Top genres</span></div><div class="stats-genres">`;
+    html += genres.map((g) => `<div class="stats-genre"><span class="stats-genre-name">${escapeHtml(g.genre)}</span><span class="stats-genre-track"><span class="stats-genre-fill" style="width:${Math.round((g.plays / top) * 100)}%"></span></span><span class="stats-genre-n">${g.plays.toLocaleString()}</span></div>`).join("");
+    html += `</div></div>`;
+  }
+
   html += `<div class="tag-issue-section"><div class="tag-issue-header"><span>Most played</span></div><div class="tag-issue-list">`;
-  html += rowsHtml(data.top_tracks, (t) => `<div class="tag-issue-row"><div class="tag-issue-info">${escapeHtml(t.artist || "")} — ${escapeHtml(t.title || "")}</div><span>${t.play_count}×</span></div>`);
+  html += rowsHtml(data.top_tracks.slice(0, 10), (t) => `<div class="tag-issue-row"><div class="tag-issue-info">${escapeHtml(t.artist || "")} — ${escapeHtml(t.title || "")}</div><span>${t.play_count}×</span></div>`);
   html += `</div></div>`;
   html += `<div class="tag-issue-section"><div class="tag-issue-header"><span>Top artists</span></div><div class="tag-issue-list">`;
   html += rowsHtml(data.top_artists, (a) => `<div class="tag-issue-row"><div class="tag-issue-info">${escapeHtml(a.artist || "Unknown")}</div><span>${a.plays}×</span></div>`);
   html += `</div></div>`;
   html += `<div class="tag-issue-section"><div class="tag-issue-header"><span>Recently played</span></div><div class="tag-issue-list">`;
-  html += rowsHtml(data.recently_played || [], (t) => `<div class="tag-issue-row"><div class="tag-issue-info">${escapeHtml(t.artist || "")} — ${escapeHtml(t.title || "")}</div><span>${escapeHtml(statsWhen(t.last_played_at))}</span></div>`);
+  html += rowsHtml((data.recently_played || []).slice(0, 10), (t) => `<div class="tag-issue-row"><div class="tag-issue-info">${escapeHtml(t.artist || "")} — ${escapeHtml(t.title || "")}</div><span>${escapeHtml(statsWhen(t.last_played_at))}</span></div>`);
   html += `</div></div>`;
   el("stats-body").innerHTML = html;
 });
@@ -3500,7 +3552,10 @@ el("help-close").addEventListener("click", () => el("help-backdrop").classList.a
 el("help-backdrop").addEventListener("click", (e) => { if (e.target.id === "help-backdrop") el("help-backdrop").classList.add("hidden"); });
 
 // ------------------------------------------------------------------- about --
-el("open-about").addEventListener("click", () => el("about-backdrop").classList.remove("hidden"));
+el("open-about").addEventListener("click", () => {
+  el("about-backdrop").classList.remove("hidden");
+  if (typeof loadAboutVersion === "function") loadAboutVersion();
+});
 el("about-close").addEventListener("click", () => el("about-backdrop").classList.add("hidden"));
 el("about-backdrop").addEventListener("click", (e) => { if (e.target.id === "about-backdrop") el("about-backdrop").classList.add("hidden"); });
 
