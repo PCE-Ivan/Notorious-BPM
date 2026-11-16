@@ -44,6 +44,25 @@ Read `desktop_macos.py` side by side with the restored `launcher.py`:
 - Stops radio level meters on quit (`/api/radio/levels/stop-all`)
 - The macOS folder-permission pre-touch is Mac-only: skip it on Windows
 
+## Same code, both platforms
+
+The page (`static/`) and the server (`app.py` and its modules) are shared:
+anything added to the Mac app is in this repo and must work on Windows too.
+Do not fork them into Windows copies — add a platform branch where behaviour
+has to differ. Pull the latest `main` before starting; features added after
+this brief was first written (for example the **Song ID key** setup window,
+`static/songid.js`, added in 1.3.1) are part of what has to work.
+
+Things the page expects from the launcher, on either platform:
+- `window.pywebview.api.open_external_url(url)` — opens the real browser
+  (donate links, the update download link, the AcoustID sign-up page)
+- `window.pywebview.api.save_export(...)` — the Backup "save file" dialog
+
+Mac wording that the page shows and needs a Windows form: messages telling
+the user to run `brew install chromaprint` / `brew install ffmpeg` (on
+Windows both are bundled, so these should never appear — if a tool is
+missing, say the install is damaged), "Show in Finder", and ⌘ in Help.
+
 ## PyInstaller: modules to include
 
 `jukebox_macos.spec` has the current list of `hiddenimports`. The Windows spec
@@ -131,6 +150,8 @@ stop and tell the user rather than quietly dropping it.
 - [ ] Organize by Artist, then Undo
 - [ ] Drag a folder of music onto the window: imported
 - [ ] Convert a track to MP3/FLAC
+- [ ] View ▸ Song ID key: the button opens the browser, Paste works, a wrong
+      key is refused, a real key is saved; Identify with no key opens the window
 - [ ] Live Radio: play a station, now-playing title, Identify this song
 - [ ] Volume leveling; lyrics; fetch cover art
 - [ ] Multiple libraries: new, open, switch

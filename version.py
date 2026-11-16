@@ -1,6 +1,6 @@
 """The app's version, in one place: About, the update check, and the build
 (jukebox_macos.spec reads it for the bundle's Info.plist)."""
-VERSION = "1.3"
+VERSION = "1.3.1"
 RELEASES_API = "https://api.github.com/repos/PCE-Ivan/Notorious-BPM/releases/latest"
 RELEASES_PAGE = "https://github.com/PCE-Ivan/Notorious-BPM/releases/latest"
 

@@ -180,17 +180,8 @@ el("radio-identify-btn").addEventListener("click", async () => {
       track.hasRealMetadata = true;
       applyRadioNowPlayingDisplay(track, el("np-art").classList.contains("hidden") ? null : el("np-art").src);
     } else if (result.error === "no_api_key") {
-      const key = prompt(
-        "Song identification needs a free AcoustID API key (the same free, open lookup MusicBrainz Picard uses).\n\n" +
-        "Get one in under a minute at acoustid.org/new-application, then paste it here:"
-      );
-      if (key && key.trim()) {
-        await api("/radio/acoustid-key", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ acoustidApiKey: key.trim() }),
-        });
-        showToast("Saved — click Identify again to try now.", { kind: "success" });
-      }
+      // Set the key up right here, then identify the song that was asked about.
+      openSongIdSetup(() => el("radio-identify-btn").click());
     } else if (result.error === "fpcalc_missing") {
       showToast('Song identification needs "chromaprint" installed. Run `brew install chromaprint` in Terminal, then restart the app.', { kind: "error" });
     } else if (result.error === "no_match") {

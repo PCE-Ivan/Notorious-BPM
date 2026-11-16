@@ -92,8 +92,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleDisplayName": "Notorious B.P.M.",
         "CFBundleName": "Notorious B.P.M.",
-        "CFBundleShortVersionString": "1.3",
-        "CFBundleVersion": "1.3",
+        "CFBundleShortVersionString": "1.3.1",
+        "CFBundleVersion": "1.3.1",
         "LSApplicationCategoryType": "public.app-category.music",
         "LSMinimumSystemVersion": "11.0",
         "LSUIElement": False,

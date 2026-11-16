@@ -97,9 +97,9 @@ These self-detect at runtime — the app works without them:
 - **`ffmpeg`** — loudness measurement for volume leveling, and VU meters for
   internet radio.
 - **`chromaprint`** (provides `fpcalc`) — finding duplicates by sound and
-  "Identify this song". Radio ID also needs a free
-  [AcoustID](https://acoustid.org/new-application) API key, which the app
-  prompts for the first time you use it.
+  "Identify this song". Song ID also needs a free
+  [AcoustID](https://acoustid.org/new-application) key: **View ▸ Song ID key**
+  walks you through getting one and checks it before saving.
 
 Install both with `brew install ffmpeg chromaprint`.
 

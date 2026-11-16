@@ -389,7 +389,7 @@ el("fix-artist-title-btn").addEventListener("click", async () => {
 
 const VERIFY_AUDIO_ERROR_MESSAGES = {
   fpcalc_missing: "Needs “fpcalc” installed (brew install chromaprint) — same requirement as Live Radio's song ID.",
-  no_api_key: "Needs a free AcoustID API key — set one in Live Radio's settings first.",
+  no_api_key: "Needs a free Song ID key — the setup window has just opened; try again once it's saved.",
 };
 
 function renderAudioMismatchRow(m) {
@@ -508,6 +508,7 @@ async function runVerifyAudio(trackIds) {
   }
   if (status.error) {
     resultEl.textContent = VERIFY_AUDIO_ERROR_MESSAGES[status.error] || `Failed: ${status.error}`;
+    if (status.error === "no_api_key") openSongIdSetup();
     return;
   }
   const stats = status.result || {};

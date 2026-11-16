@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -375,17 +376,69 @@ def radio_now_playing():
     return jsonify({"title": title})
 
 
+ACOUSTID_SIGNUP_URL = "https://acoustid.org/new-application"
+
+
+def clean_acoustid_key(text):
+    """What was pasted, minus what tends to come along with it: spaces, quotes,
+    a trailing full stop, or the whole "API key: xxxx" line from the web page."""
+    key = (text or "").strip().strip("\"'`.,;").strip()
+    if ":" in key:
+        key = key.rsplit(":", 1)[1].strip()
+    return key.split()[-1] if key.split() else ""
+
+
+def check_acoustid_key(key, timeout=8):
+    """Asks AcoustID itself whether it knows this key. "valid", "invalid", or
+    "unchecked" when it couldn't be asked (offline, service down) -- that one
+    is not a reason to refuse a key someone has just pasted.
+
+    The lookup is sent with a deliberately meaningless fingerprint: a real key
+    gets "invalid fingerprint" back, an unknown one gets "invalid API key"."""
+    url = "https://api.acoustid.org/v2/lookup?" + urllib.parse.urlencode(
+        {"client": key, "duration": "10", "fingerprint": "AQAAA", "format": "json"})
+    req = urllib.request.Request(url, headers={"User-Agent": RADIO_UA})
+    try:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+        except urllib.error.HTTPError as e:
+            body = e.read()   # AcoustID answers errors with a 400 and a JSON body
+        data = json.loads(body.decode("utf-8", "ignore"))
+    except Exception:
+        return "unchecked"
+    if data.get("status") == "ok":
+        return "valid"
+    code = (data.get("error") or {}).get("code")
+    if code == 4:
+        return "invalid"
+    return "valid" if code in (2, 3) else "unchecked"   # complained about the fingerprint, not the key
+
+
 @bp.route("/api/radio/acoustid-key")
 def get_acoustid_key():
-    return jsonify({"acoustidApiKey": jukebox_config.load_config().get("acoustidApiKey") or ""})
+    """Whether a key is set, and its last four characters so it can be
+    recognised -- the key itself never goes back to the page."""
+    key = (jukebox_config.load_config().get("acoustidApiKey") or "").strip()
+    return jsonify({"set": bool(key), "hint": key[-4:] if len(key) >= 8 else "", "signup": ACOUSTID_SIGNUP_URL})
 
 
 @bp.route("/api/radio/acoustid-key", methods=["POST"])
 def set_acoustid_key():
+    """Saves the key after checking it with AcoustID. A key AcoustID rejects
+    is not saved (the answer says so); one that couldn't be checked is saved
+    and reported as unchecked. An empty key removes the saved one."""
     data = request.get_json(force=True, silent=True) or {}
-    key = (data.get("acoustidApiKey") or "").strip()
+    key = clean_acoustid_key(data.get("acoustidApiKey"))
+    if not key:
+        jukebox_config.update_config(lambda cfg: cfg.__setitem__("acoustidApiKey", ""))
+        return jsonify({"ok": True, "state": "removed"})
+    state = check_acoustid_key(key)
+    if state == "invalid":
+        return jsonify({"ok": False, "state": "invalid",
+                        "error": "AcoustID doesn't recognise that key. Copy the “API key” shown for your application and paste it again."})
     jukebox_config.update_config(lambda cfg: cfg.__setitem__("acoustidApiKey", key))
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "state": state, "hint": key[-4:] if len(key) >= 8 else ""})
 
 
 def _fingerprint_lookup(fpath, api_key, fpcalc_path, timeout=30):

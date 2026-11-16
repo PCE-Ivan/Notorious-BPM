@@ -159,6 +159,10 @@
               <option value="row-density">Compact</option>
             </select>
           </div>
+          <div class="view-menu-row">
+            <span class="view-menu-label">Song ID key</span>
+            <button id="songid-open" class="btn-small">Set up…</button>
+          </div>
           <div class="view-menu-divider"></div>
           <label class="view-menu-check" for="ratings-in-files">
             <input type="checkbox" id="ratings-in-files">
@@ -888,7 +892,7 @@
           existing song — equally true whether or not a given file's actual audio is that
           song, so a file mislabeled with a different real song's tags passes that check.
           This instead fingerprints the audio itself (Chromaprint/AcoustID — the same tools
-          and account as Live Radio's song-ID feature, so it needs that same free AcoustID
+          and key as Live Radio's song-ID feature, so it needs that same free AcoustID
           API key and <code>fpcalc</code> installed) and reports anything that doesn't match,
           for you to review — it never changes a tag on its own. Real per-track work (decode
           + a lookup each, a little under a second per track), so run it on a selection, or on
@@ -1021,6 +1025,42 @@
         <p class="ipod-summary-title">Import complete</p>
         <ul id="ipod-summary-list" class="ipod-summary-list"></ul>
         <button id="ipod-summary-review-dups" class="btn-secondary btn-small hidden">Review duplicates</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="songid-backdrop" class="modal-backdrop hidden">
+  <div class="dup-panel">
+    <div class="dup-panel-header">
+      <h3>Song ID key</h3>
+      <button id="songid-close" class="btn-icon" title="Close" aria-label="Close">✕</button>
+    </div>
+    <div class="dup-body">
+      <p class="dup-summary-text">
+        Identifying a song on the radio, and checking your tags against the
+        actual audio, both ask <b>AcoustID</b> — a free, open song database.
+        It needs a key, which is free and takes about a minute to get.
+      </p>
+      <p id="songid-status" class="songid-status"></p>
+      <ol class="songid-steps">
+        <li>
+          <button id="songid-open-site" class="btn-secondary">Open acoustid.org in your browser</button>
+          <span class="dup-summary-note">Sign in there, or create a free account.</span>
+        </li>
+        <li>Register an application — any name will do, e.g. “Notorious BPM”, version “1”.</li>
+        <li>
+          Copy the <b>API key</b> it shows you and paste it here:
+          <div class="songid-entry">
+            <input id="songid-input" type="text" class="search" placeholder="Paste the API key" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="AcoustID API key">
+            <button id="songid-paste" class="btn-secondary" title="Paste from the clipboard">Paste</button>
+          </div>
+        </li>
+      </ol>
+      <p id="songid-message" class="songid-message" role="status"></p>
+      <div class="tidy-actions">
+        <button id="songid-save" class="btn-primary">Check and save</button>
+        <button id="songid-remove" class="btn-small hidden">Remove the saved key</button>
       </div>
     </div>
   </div>
@@ -1225,6 +1265,15 @@
         to “Artist - Title” and similar patterns.
       </p>
 
+      <h4>🔍 Song ID key</h4>
+      <p>
+        Identifying a radio song and checking tags against the audio use
+        AcoustID, a free song database that needs a (free) key. Set it up
+        under <b>View ▸ Song ID key</b>: the window opens the sign-up page,
+        checks the key you paste, and saves it. It also opens by itself the
+        first time a feature needs the key.
+      </p>
+
       <h4>🌙 Sleep timer · 🔁 Repeat · picking up where you left off</h4>
       <p>
         The moon button fades playback out after 15–60 minutes or at the
@@ -1419,6 +1468,7 @@
 <script src="history.js"></script>
 <script src="session.js"></script>
 <script src="tidy.js"></script>
+<script src="songid.js"></script>
 <script src="shell.js"></script>
 </body>
 </html>

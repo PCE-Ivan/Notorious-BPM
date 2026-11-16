@@ -2749,7 +2749,7 @@ function makeModalAccessible(backdrop) {
   "tags-backdrop", "ipod-backdrop", "queue-backdrop", "trash-backdrop",
   "stats-backdrop", "help-backdrop", "about-backdrop", "lyrics-backdrop",
   "radio-backdrop", "export-backdrop", "smart-playlist-backdrop", "welcome-backdrop",
-  "tidy-backdrop",
+  "tidy-backdrop", "songid-backdrop",
 ].forEach((id) => { const backdrop = el(id); if (backdrop) makeModalAccessible(backdrop); });
 
 // ------------------------------------------------------------- first run --
@@ -3769,10 +3769,11 @@ el("selection-edit-tags").addEventListener("click", () => {
         if (!result.ok) {
           const messages = {
             fpcalc_missing: "Needs “fpcalc” installed (brew install chromaprint) — same requirement as Live Radio's song ID.",
-            no_api_key: "Needs a free AcoustID API key — set one in Live Radio's settings first.",
+            no_api_key: "Needs a free Song ID key — the setup window has just opened; try again once it's saved.",
             no_match: "Couldn't identify this recording.",
           };
           status.textContent = messages[result.error] || `Couldn't verify: ${result.error}`;
+          if (result.error === "no_api_key") openSongIdSetup();
           return;
         }
         if (result.mismatched) {
